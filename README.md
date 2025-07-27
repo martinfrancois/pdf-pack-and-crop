@@ -69,6 +69,18 @@ Output → **`final_output.pdf`** (or the name you supply).
 
 ---
 
+
+## Running Tests
+
+Install test dependencies and run `pytest` with coverage:
+
+```bash
+python -m pip install -r requirements.txt
+pytest -vv --cov=crop_and_pack.py --cov-report=term-missing
+```
+
+Integration tests need `pymupdf`, `Pillow` and `rectpack`.
+
 ## Contributing
 
 1. Fork, hack, run `black *.py`.
