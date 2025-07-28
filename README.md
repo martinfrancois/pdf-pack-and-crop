@@ -69,6 +69,20 @@ Output → **`final_output.pdf`** (or the name you supply).
 
 ---
 
+## Testing
+
+Install the dependencies and run the test suite with `pytest`:
+
+```bash
+python -m pip install -r requirements.txt
+pytest
+```
+
+The integration tests require the optional PDF tools. They will be skipped
+automatically when the dependencies are missing.
+
+---
+
 ## Contributing
 
 1. Fork, hack, run `black *.py`.
