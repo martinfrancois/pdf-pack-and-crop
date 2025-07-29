@@ -103,3 +103,19 @@ def test_rect_rotated():
     assert cp.rect_rotated(rect, 40, 60, 1)
     rect2 = types.SimpleNamespace(width=42, height=52)
     assert not cp.rect_rotated(rect2, 40, 60, 1)
+
+
+def test_find_minimal_packing_many_small():
+    items = [(f"img{i}", 10, 10) for i in range(10)]
+    eff_w, eff_h = 40, 120
+    pk, rotate = cp.find_minimal_packing(items, eff_w, eff_h, 0)
+    assert rotate is False
+    assert len(list(pk)) == 1
+    assert len(pk.rect_list()) == 10
+
+
+def test_find_minimal_packing_too_big():
+    items = [("big", 100, 100)]
+    with pytest.raises(RuntimeError):
+        cp.find_minimal_packing(items, 50, 50, 0)
+
