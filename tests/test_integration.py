@@ -6,7 +6,7 @@ fitz = pytest.importorskip('fitz')
 if getattr(fitz, '__is_stub__', False):
     pytest.skip('fitz stubbed', allow_module_level=True)
 
-import crop_and_pack as cp
+import pack_and_crop as cp
 
 
 def make_pdf(path: Path):

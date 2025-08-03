@@ -53,7 +53,7 @@ if 'rectpack' not in sys.modules:
     rectpack.SORT_AREA = object()
     sys.modules['rectpack'] = rectpack
 
-import crop_and_pack as cp
+import pack_and_crop as cp
 
 
 def test_mm_to_pt():

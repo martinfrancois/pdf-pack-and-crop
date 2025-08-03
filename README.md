@@ -35,13 +35,13 @@ python -m pip install pymupdf pillow rectpack
 
 ```bash
 # 1. Quick start (defaults)
-./pack_and_crop.py my1.pdf my2.pdf my3.pdf
+python pack_and_crop.py my1.pdf my2.pdf my3.pdf
 
 # 2. Pack every PDF in a folder
-./pack_and_crop.py labels/
+python pack_and_crop.py labels/
 
 # 3. Custom: Letter paper, 3 mm sheet margin, 8 mm spacing, 400 DPI
-./pack_and_crop.py docs/ --pagesize Letter --page-margin 3 --spacing 8 --dpi 400 -o packed.pdf
+python pack_and_crop.py docs/ --pagesize Letter --page-margin 3 --spacing 8 --dpi 400 -o packed.pdf
 ```
 
 | Flag                                                                                                    | Purpose                              |
@@ -76,7 +76,7 @@ Install test dependencies and run `pytest` with coverage:
 
 ```bash
 python -m pip install -r requirements.txt
-pytest -vv --cov=crop_and_pack.py --cov-report=term-missing
+pytest -vv --cov=pack_and_crop.py --cov-report=term-missing
 ```
 
 Integration tests need `pymupdf`, `Pillow` and `rectpack`.
