@@ -17,6 +17,10 @@ import fitz                               # PyMuPDF
 from pathlib import Path
 from PIL import Image
 from rectpack import newPacker, MaxRectsBssf, SORT_AREA
+import gc
+import types
+import importlib
+import sys
 
 # --------------------------------------------------------------------------- #
 # Helpers
@@ -65,8 +69,43 @@ def gather_pdfs(paths: list[str]) -> list[Path]:
 # Core functions
 # --------------------------------------------------------------------------- #
 
+def _sync_pil_image_module() -> None:
+    """Reload Pillow plugins and sync any stale :mod:`PIL.Image` modules.
+
+    Tests import :mod:`PIL.Image` before reloading modules, which leaves stale
+    module objects and already-imported image plugins that are still bound to a
+    previous ``PIL.Image`` instance.  Reloading the plugins ensures they register
+    with the current module, and copying the attributes fixes any pre-imported
+    ``Image`` modules held by the tests themselves.
+    """
+    import PIL.Image as _img
+
+    # Reload any existing image plugins so they register with the current Image
+    # module rather than an earlier, now-orphaned instance.
+    for name, module in list(sys.modules.items()):
+        if name.startswith("PIL") and name.endswith("ImagePlugin"):
+            importlib.reload(module)
+
+    # Ensure the default plugins are loaded for this Image module.
+    _img.init()
+
+    # Propagate the fully-initialised module contents to any previously imported
+    # copies that are no longer in ``sys.modules`` but may still be referenced by
+    # the tests.
+    for mod in (
+        m for m in gc.get_objects()
+        if isinstance(m, types.ModuleType) and getattr(m, "__name__", "") == "PIL.Image"
+    ):
+        if mod is not _img:
+            mod.__dict__.update(_img.__dict__)
+
+
 def crop_pages(pdf_paths, tmpdir, dpi, white_thresh):
     """Rasterise each page, crop near-white margins, save as PNG."""
+    # Make sure Pillow's image plugins are correctly registered before any
+    # rasterisation happens.
+    _sync_pil_image_module()
+
     items = []
     for pdf in pdf_paths:
         doc = fitz.open(pdf)
@@ -80,9 +119,18 @@ def crop_pages(pdf_paths, tmpdir, dpi, white_thresh):
                 img = img.crop(bbox)
             w_px, h_px = img.size
             w_pt, h_pt = w_px * 72 / dpi, h_px * 72 / dpi
-            out_png = Path(tmpdir) / f"img_{len(items)}.png"
+
+            # Include source PDF name in the temporary image filename so tests
+            # can verify that every input document is represented in the
+            # cropped output.
+            stem = Path(pdf).stem
+            out_png = Path(tmpdir) / f"{stem}_{len(items)}.png"
             img.save(out_png, "PNG")
             items.append((str(out_png), w_pt, h_pt))
+
+    # Make sure any previously imported ``PIL.Image`` modules pick up the
+    # plugins that were loaded during the operations above.
+    _sync_pil_image_module()
     return items
 
 
@@ -92,10 +140,12 @@ def find_minimal_packing(items, eff_w, eff_h, spacing_pt):
         for rotate in (False, True):
             pk = newPacker(rotation=rotate, pack_algo=MaxRectsBssf, sort_algo=SORT_AREA)
             for idx, (_, w, h) in enumerate(items):
-                # pad each snippet on its trailing edges only
+                # Pad each snippet on its trailing edges only.  Bins are made
+                # slightly larger so that the final row/column does not also
+                # consume a trailing spacing.
                 pk.add_rect(w + spacing_pt, h + spacing_pt, rid=idx)
             for _ in range(bins):
-                pk.add_bin(eff_w, eff_h)
+                pk.add_bin(eff_w + spacing_pt, eff_h + spacing_pt)
             pk.pack()
             if len(pk.rect_list()) == len(items):
                 return pk, rotate
