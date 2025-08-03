@@ -99,8 +99,7 @@ def test_find_minimal_packing_rotation_needed():
 
 
 def test_rect_rotated():
-    rect = types.SimpleNamespace(width=62, height=42)
+    rect = types.SimpleNamespace(width=61, height=41)
     assert cp.rect_rotated(rect, 40, 60, 1)
     rect2 = types.SimpleNamespace(width=42, height=52)
     assert not cp.rect_rotated(rect2, 40, 60, 1)
-

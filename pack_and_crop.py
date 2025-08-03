@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-Pack‑and‑Crop
+Pack-and-Crop
 -------------
 
 • Crops white margins from every page of the input PDFs (or PDFs in a folder)
 • Packs the cropped snippets onto as few sheets as possible
 • Independently configurable:
     – Target page size (default A4)
-    – **Page margin** around the sheet (default 5 mm)
-    – **Spacing** between snippets (default 5 mm)
-    – Rasterisation DPI (default 300)
+    – **Page margin** around the sheet (default 5 mm)
+    – **Spacing** between snippets (default 5 mm)
+    – Rasterisation DPI (default 300)
 """
 
-import sys, io, math, argparse, glob, tempfile
+import sys, io, argparse, tempfile
 import fitz                               # PyMuPDF
 from pathlib import Path
 from PIL import Image
@@ -21,8 +21,10 @@ from rectpack import newPacker, MaxRectsBssf, SORT_AREA
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
+
 def mm_to_pt(mm: float) -> float:
-    return mm * 72 / 25.4                 # 1 in = 25.4 mm, 1 in = 72 pt
+    return mm * 72 / 25.4                 # 1 in = 25.4 mm, 1 in = 72 pt
+
 
 def parse_pagesize(arg: str) -> tuple[float, float]:
     """
@@ -31,7 +33,7 @@ def parse_pagesize(arg: str) -> tuple[float, float]:
     """
     PRESET = {
         "A4"    : (210, 297),
-        "Letter": (215.9, 279.4),         # 8.5 in × 11 in
+        "Letter": (215.9, 279.4),         # 8.5 in × 11 in
     }
     a = arg.lower()
     if a in (k.lower() for k in PRESET):
@@ -45,6 +47,7 @@ def parse_pagesize(arg: str) -> tuple[float, float]:
         raise argparse.ArgumentTypeError("Unknown page size")
     return mm_to_pt(w_mm), mm_to_pt(h_mm)
 
+
 def gather_pdfs(paths: list[str]) -> list[Path]:
     pdfs: list[Path] = []
     for p in paths:
@@ -57,11 +60,13 @@ def gather_pdfs(paths: list[str]) -> list[Path]:
         raise SystemExit("❌ No PDF files found.")
     return pdfs
 
+
 # --------------------------------------------------------------------------- #
 # Core functions
 # --------------------------------------------------------------------------- #
+
 def crop_pages(pdf_paths, tmpdir, dpi, white_thresh):
-    """Rasterise each page, crop near‑white margins, save as PNG."""
+    """Rasterise each page, crop near-white margins, save as PNG."""
     items = []
     for pdf in pdf_paths:
         doc = fitz.open(pdf)
@@ -80,13 +85,15 @@ def crop_pages(pdf_paths, tmpdir, dpi, white_thresh):
             items.append((str(out_png), w_pt, h_pt))
     return items
 
+
 def find_minimal_packing(items, eff_w, eff_h, spacing_pt):
     """Return (packer, rotate_used) that fits everything in as few sheets as possible."""
     for bins in range(1, len(items) + 1):
         for rotate in (False, True):
             pk = newPacker(rotation=rotate, pack_algo=MaxRectsBssf, sort_algo=SORT_AREA)
             for idx, (_, w, h) in enumerate(items):
-                pk.add_rect(w + 2 * spacing_pt, h + 2 * spacing_pt, rid=idx)
+                # pad each snippet on its trailing edges only
+                pk.add_rect(w + spacing_pt, h + spacing_pt, rid=idx)
             for _ in range(bins):
                 pk.add_bin(eff_w, eff_h)
             pk.pack()
@@ -94,10 +101,12 @@ def find_minimal_packing(items, eff_w, eff_h, spacing_pt):
                 return pk, rotate
     raise RuntimeError("Packing failed – snippets larger than page minus margins.")
 
+
 def rect_rotated(rect, w0, h0, spacing_pt):
-    w_r = rect.width  - 2 * spacing_pt
-    h_r = rect.height - 2 * spacing_pt
+    w_r = rect.width  - spacing_pt
+    h_r = rect.height - spacing_pt
     return abs(w_r - h0) < 0.1 and abs(h_r - w0) < 0.1
+
 
 def render_pdf(packer, items, page_w, page_h, margin_pt, spacing_pt, rotate_used, output):
     out = fitz.open()
@@ -106,24 +115,26 @@ def render_pdf(packer, items, page_w, page_h, margin_pt, spacing_pt, rotate_used
 
     for bin_idx, abin in enumerate(packer):
         for rect in abin:
-            x, y, w_pack, h_pack, rid = rect.x, rect.y, rect.width, rect.height, rect.rid
+            x, y, _, _, rid = rect.x, rect.y, rect.width, rect.height, rect.rid
             img_path, w_orig, h_orig = items[rid]
             rotated = rotate_used and rect_rotated(rect, w_orig, h_orig, spacing_pt)
             cw, ch = (h_orig, w_orig) if rotated else (w_orig, h_orig)
 
-            # position relative to bottom‑left PDF origin
-            x0 = margin_pt + x + spacing_pt
-            y0 = page_h - (margin_pt + y + spacing_pt + ch)
-            rect_dest = fitz.Rect(x0, y0, x0 + cw, y0 + ch)
+            # Only use packer padding: no extra spacing at edges
+            x0 = margin_pt + x
+            y0 = page_h - (margin_pt + y + ch)
 
+            rect_dest = fitz.Rect(x0, y0, x0 + cw, y0 + ch)
             out[bin_idx].insert_image(rect_dest, filename=img_path, rotate=90 if rotated else 0)
 
     out.save(output)
     print(f"✅  {output} created – {len(packer)} sheet(s)")
 
+
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
+
 def main():
     parser = argparse.ArgumentParser(
         description="Crop & tightly pack PDFs onto the fewest pages."
@@ -134,11 +145,11 @@ def main():
                         help="Target page size (default A4)")
     parser.add_argument("--page-margin", type=float, default=5, metavar="MM",
                         help="Margin around page edges in mm (default 5)")
-    parser.add_argument("--spacing", type=float, default=5, metavar="MM",
+    parser.add_argument("--spacing", type=float, default=1, metavar="MM",
                         help="Spacing between snippets in mm (default 5)")
     parser.add_argument("--dpi", type=int, default=300,
                         help="Rasterisation DPI (default 300)")
-    parser.add_argument("--threshold", type=int, default=250, metavar="0‑255",
+    parser.add_argument("--threshold", type=int, default=250, metavar="0-255",
                         help="Greyscale threshold >value treated as white (default 250)")
     parser.add_argument("-o", "--output", default="final_output.pdf",
                         help="Output PDF filename (default final_output.pdf)")
