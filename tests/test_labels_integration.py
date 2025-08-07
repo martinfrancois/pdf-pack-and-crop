@@ -28,13 +28,14 @@ def _reload_modules():
 ])
 def test_pack_and_crop_labels_various(tmp_path, label_nums, expected_pages):
     import importlib
-    from PIL import Image
 
     # Reload modules to avoid stubs
     _reload_modules()
     fitz = pytest.importorskip('fitz')
     if getattr(fitz, '__is_stub__', False):
         pytest.skip('fitz stubbed', allow_module_level=True)
+    
+    from PIL import Image
 
     # Reload the script under test
     import pack_and_crop as cp

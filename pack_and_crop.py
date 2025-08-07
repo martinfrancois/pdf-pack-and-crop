@@ -15,8 +15,16 @@ Pack-and-Crop
 import sys, io, argparse, tempfile
 import fitz                               # PyMuPDF
 from pathlib import Path
-from PIL import Image
 from rectpack import newPacker, MaxRectsBssf, SORT_AREA
+try:
+    from rectpack import MaxRectsBaf, MaxRectsBl, MaxRectsBlsf
+    from rectpack import SORT_PERI, SORT_SSIDE, SORT_LSIDE, SORT_RATIO
+    FULL_RECTPACK = True
+except ImportError:
+    # Fallback for stub modules in tests
+    MaxRectsBaf = MaxRectsBl = MaxRectsBlsf = MaxRectsBssf
+    SORT_PERI = SORT_SSIDE = SORT_LSIDE = SORT_RATIO = SORT_AREA
+    FULL_RECTPACK = False
 
 # --------------------------------------------------------------------------- #
 # Helpers
@@ -67,9 +75,11 @@ def gather_pdfs(paths: list[str]) -> list[Path]:
 
 def crop_pages(pdf_paths, tmpdir, dpi, white_thresh):
     """Rasterise each page, crop near-white margins, save as PNG."""
+    from PIL import Image  # Import locally to avoid stub module issues
     items = []
     for pdf in pdf_paths:
         doc = fitz.open(pdf)
+        pdf_stem = Path(pdf).stem  # Get basename without extension
         for i in range(doc.page_count):
             page  = doc.load_page(i)
             pix   = page.get_pixmap(dpi=dpi, alpha=False)
@@ -80,7 +90,7 @@ def crop_pages(pdf_paths, tmpdir, dpi, white_thresh):
                 img = img.crop(bbox)
             w_px, h_px = img.size
             w_pt, h_pt = w_px * 72 / dpi, h_px * 72 / dpi
-            out_png = Path(tmpdir) / f"img_{len(items)}.png"
+            out_png = Path(tmpdir) / f"{pdf_stem}_{i}_{len(items)}.png"
             img.save(out_png, "PNG")
             items.append((str(out_png), w_pt, h_pt))
     return items
@@ -88,9 +98,25 @@ def crop_pages(pdf_paths, tmpdir, dpi, white_thresh):
 
 def find_minimal_packing(items, eff_w, eff_h, spacing_pt):
     """Return (packer, rotate_used) that fits everything in as few sheets as possible."""
-    for bins in range(1, len(items) + 1):
-        for rotate in (False, True):
-            pk = newPacker(rotation=rotate, pack_algo=MaxRectsBssf, sort_algo=SORT_AREA)
+    # Try a few good algorithms with multiple approaches
+    strategies = [
+        (MaxRectsBssf, SORT_AREA, False),
+        (MaxRectsBssf, SORT_AREA, True),
+        (MaxRectsBaf, SORT_AREA, False),
+        (MaxRectsBaf, SORT_AREA, True),
+        (MaxRectsBl, SORT_AREA, False),
+        (MaxRectsBl, SORT_AREA, True),
+    ]
+    
+    best_result = None
+    best_pages = float('inf')
+    
+    for pack_algo, sort_algo, rotate in strategies:
+        for bins in range(1, len(items) + 1):
+            if bins >= best_pages:
+                break  # No point trying more bins
+                
+            pk = newPacker(rotation=rotate, pack_algo=pack_algo, sort_algo=sort_algo)
             for idx, (_, w, h) in enumerate(items):
                 # pad each snippet on its trailing edges only
                 pk.add_rect(w + spacing_pt, h + spacing_pt, rid=idx)
@@ -98,8 +124,15 @@ def find_minimal_packing(items, eff_w, eff_h, spacing_pt):
                 pk.add_bin(eff_w, eff_h)
             pk.pack()
             if len(pk.rect_list()) == len(items):
-                return pk, rotate
-    raise RuntimeError("Packing failed – snippets larger than page minus margins.")
+                if bins < best_pages:
+                    best_pages = bins
+                    best_result = (pk, rotate)
+                break  # Found a solution with this number of bins
+    
+    if best_result is None:
+        raise RuntimeError("Packing failed – snippets larger than page minus margins.")
+    
+    return best_result
 
 
 def rect_rotated(rect, w0, h0, spacing_pt):
