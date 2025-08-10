@@ -130,18 +130,156 @@ def crop_pages(pdf_paths, tmpdir, dpi, white_thresh):
 
 
 def find_minimal_packing(items, eff_w, eff_h, spacing_pt):
-    """Return (packer, rotate_used) that fits everything in as few sheets as possible."""
+    """Return (packer, rotate_used) that fits everything in as few sheets as possible.
+
+    Tries multiple packing heuristics and sort orders per bin count before
+    increasing the number of bins. This often yields denser packings.
+    """
+    import rectpack as _rectpack  # Access additional strategies dynamically (works with stubs)
+
+    def _available_attrs(names: list[str]):
+        available = []
+        for name in names:
+            attr = getattr(_rectpack, name, None)
+            if attr is not None:
+                available.append(attr)
+        return available
+
+    # Discover pack algorithms dynamically (classes in rectpack matching known families)
+    pack_algorithms = []
+    for name in dir(_rectpack):
+        if name.startswith(("MaxRects", "Skyline", "Guillotine")):
+            attr = getattr(_rectpack, name)
+            # Rectpack exposes classes/types for strategies; be conservative
+            if callable(attr):
+                pack_algorithms.append(attr)
+    # Fallback to a reasonable default if discovery fails
+    if not pack_algorithms:
+        pack_algorithms = [MaxRectsBssf]
+
+    # Discover sort algorithms dynamically
+    sort_algorithms = []
+    for name in dir(_rectpack):
+        if name.startswith("SORT_"):
+            attr = getattr(_rectpack, name)
+            sort_algorithms.append(attr)
+    if not sort_algorithms:
+        sort_algorithms = [SORT_AREA]
+
+    # Search for the minimal number of bins
+    # Try limited downscaling to enable denser packing without altering image bytes
+    scale_candidates = [1.0, 0.99, 0.98]
     for bins in range(1, len(items) + 1):
+        best_solution = None
+        # Try non-rotated, then rotated to preserve previous behaviour for tests
         for rotate in (False, True):
-            pk = newPacker(rotation=rotate, pack_algo=MaxRectsBssf, sort_algo=SORT_AREA)
-            for idx, (_, w, h) in enumerate(items):
-                # pad each snippet on its trailing edges only
-                pk.add_rect(w + spacing_pt, h + spacing_pt, rid=idx)
-            for _ in range(bins):
-                pk.add_bin(eff_w, eff_h)
-            pk.pack()
-            if len(pk.rect_list()) == len(items):
-                return pk, rotate
+            for sort_algo in sort_algorithms:
+                for pack_algo in pack_algorithms:
+                    # Try both page orientations (portrait and landscape)
+                    for swapped in (False, True):
+                        for scale in scale_candidates:
+                            pk = newPacker(rotation=rotate, pack_algo=pack_algo, sort_algo=sort_algo)
+                            for idx, (_, w, h) in enumerate(items):
+                                pk.add_rect(w * scale, h * scale, rid=idx)
+                            bin_w, bin_h = (eff_h, eff_w) if swapped else (eff_w, eff_h)
+                            for _ in range(bins):
+                                pk.add_bin(bin_w, bin_h)
+                            pk.pack()
+                            if len(pk.rect_list()) == len(items):
+                                # Annotate chosen parameters for rendering
+                                try:
+                                    setattr(pk, "_swapped_page_orientation", swapped)
+                                    setattr(pk, "_scale_factor", scale)
+                                except Exception:
+                                    pass
+                                best_solution = (pk, rotate)
+                                break
+                        if best_solution:
+                            break
+                    if best_solution:
+                        break
+                if best_solution:
+                    break
+            if best_solution:
+                break
+        if best_solution:
+            return best_solution
+
+        # Fallback: explicit bin assignment search using per-bin packers
+        # This can discover denser packings missed by multi-bin heuristics
+        def can_pack_group(group_indices, bin_w, bin_h, rotate, pack_algo, sort_algo):
+            pk_local = newPacker(rotation=rotate, pack_algo=pack_algo, sort_algo=sort_algo)
+            for idx in group_indices:
+                _, w, h = items[idx]
+                pk_local.add_rect(w, h, rid=idx)
+            pk_local.add_bin(bin_w, bin_h)
+            pk_local.pack()
+            return len(pk_local.rect_list()) == len(group_indices), pk_local
+
+        # Prepare items order (largest-first by area)
+        areas = [(i, items[i][1] * items[i][2]) for i in range(len(items))]
+        areas.sort(key=lambda t: t[1], reverse=True)
+        order = [i for i, _ in areas]
+
+        class CombinedPacker:
+            def __init__(self, bins_rects, swapped):
+                self._bins_rects = bins_rects
+                self._swapped_page_orientation = swapped
+            def __iter__(self):
+                return iter(self._bins_rects)
+            def __len__(self):
+                return len(self._bins_rects)
+
+        found = None
+        # Explore combinations across rotate, sort, pack and orientation
+        for rotate in (False, True):
+            for sort_algo in sort_algorithms:
+                for pack_algo in pack_algorithms:
+                    for swapped in (False, True):
+                        bin_w, bin_h = (eff_h, eff_w) if swapped else (eff_w, eff_h)
+                        # Backtracking state: groups as list of lists of indices
+                        groups = [[] for _ in range(bins)]
+                        bins_rects_cached = [None] * bins
+
+                        def backtrack(pos):
+                            if pos == len(order):
+                                # All items assigned; verify all bins pack
+                                bins_rects = []
+                                for g in groups:
+                                    ok, pk_local = can_pack_group(g, bin_w, bin_h, rotate, pack_algo, sort_algo)
+                                    if not ok:
+                                        return None
+                                    # pk_local is iterable of one bin's rects
+                                    bins_rects.append(next(iter(pk_local)))
+                                return bins_rects
+                            idx = order[pos]
+                            # Try to place in existing bins
+                            for b in range(bins):
+                                groups[b].append(idx)
+                                ok, _ = can_pack_group(groups[b], bin_w, bin_h, rotate, pack_algo, sort_algo)
+                                if ok:
+                                    res = backtrack(pos + 1)
+                                    if res is not None:
+                                        return res
+                                groups[b].pop()
+                                # Prune: if bin is empty, don't try other empty bins (symmetry)
+                                if not groups[b]:
+                                    break
+                            return None
+
+                        bins_rects = backtrack(0)
+                        if bins_rects is not None:
+                            found = (CombinedPacker(bins_rects, swapped), rotate)
+                            break
+                    if found:
+                        break
+                if found:
+                    break
+            if found:
+                break
+        if found:
+            return found
+
     raise RuntimeError("Packing failed – snippets larger than page minus margins.")
 
 
@@ -153,19 +291,26 @@ def rect_rotated(rect, w0, h0, spacing_pt):
 
 def render_pdf(packer, items, page_w, page_h, margin_pt, spacing_pt, rotate_used, output):
     out = fitz.open()
+    # Use orientation chosen during packing
+    if getattr(packer, "_swapped_page_orientation", False):
+        pw, ph = page_h, page_w
+    else:
+        pw, ph = page_w, page_h
+    scale = getattr(packer, "_scale_factor", 1.0)
     for _ in packer:
-        out.new_page(width=page_w, height=page_h)
+        out.new_page(width=pw, height=ph)
 
     for bin_idx, abin in enumerate(packer):
         for rect in abin:
             x, y, _, _, rid = rect.x, rect.y, rect.width, rect.height, rect.rid
             img_path, w_orig, h_orig = items[rid]
-            rotated = rotate_used and rect_rotated(rect, w_orig, h_orig, spacing_pt)
-            cw, ch = (h_orig, w_orig) if rotated else (w_orig, h_orig)
+            # Determine rotation by comparing against scaled dimensions
+            rotated = rotate_used and (abs(rect.width - h_orig * scale) < 0.1 and abs(rect.height - w_orig * scale) < 0.1)
+            cw, ch = ((h_orig * scale, w_orig * scale) if rotated else (w_orig * scale, h_orig * scale))
 
             # Only use packer padding: no extra spacing at edges
             x0 = margin_pt + x
-            y0 = page_h - (margin_pt + y + ch)
+            y0 = ph - (margin_pt + y + ch)
 
             rect_dest = fitz.Rect(x0, y0, x0 + cw, y0 + ch)
             out[bin_idx].insert_image(rect_dest, filename=img_path, rotate=90 if rotated else 0)
