@@ -16,6 +16,19 @@ import sys, io, argparse, tempfile
 import fitz                               # PyMuPDF
 from pathlib import Path
 from rectpack import newPacker, MaxRectsBssf, SORT_AREA
+import rectpack as _rectpack_mod
+
+# Attempt to import additional algorithms if available
+try:
+    from rectpack import (
+        MaxRectsBlsf, MaxRectsBaf,
+        SkylineBlWm, SkylineMwFl,
+        GuillotineBssfSas, GuillotineBafSas,
+    )
+except Exception:  # pragma: no cover - optional
+    MaxRectsBlsf = MaxRectsBaf = None
+    SkylineBlWm = SkylineMwFl = None
+    GuillotineBssfSas = GuillotineBafSas = None
 
 # --------------------------------------------------------------------------- #
 # Helpers
@@ -129,29 +142,168 @@ def crop_pages(pdf_paths, tmpdir, dpi, white_thresh):
     return items
 
 
+def _float_equal(a: float, b: float, tol: float = 1e-6) -> bool:
+    return abs(a - b) <= tol
+
+
 def find_minimal_packing(items, eff_w, eff_h, spacing_pt):
-    """Return (packer, rotate_used) that fits everything in as few sheets as possible."""
+    """Return (packer, rotate_used) that fits everything in as few sheets as possible.
+
+    Improvements:
+    - Try multiple item insertion orders to improve packing quality
+    - Try multiple packing algorithms, falling back gracefully when unavailable
+    - Try multiple sort algorithms provided by rectpack to influence placement
+    - Allow a trailing-edge spacing to "hang" outside the effective area by
+      expanding the bin by `spacing_pt` on width and height. This preserves
+      spacing between items without wasting space at the page borders.
+    - Try both portrait and landscape bin orientations and pick the first that
+      fits with the fewest sheets. Also allow mixing orientations across bins.
+    - Apply a tiny epsilon shrink to rects during packing to mitigate FP fringes.
+    - Explore slight global downscaling of contents (render-time only) to reduce
+      sheet count while preserving original image data embedded in the PDF.
+    """
+    # Precompute various item orders (indices) to try
+    indices = list(range(len(items)))
+    by_area_desc = sorted(indices, key=lambda i: items[i][1] * items[i][2], reverse=True)
+    by_area_asc = list(reversed(by_area_desc))
+    by_max_side_desc = sorted(indices, key=lambda i: max(items[i][1], items[i][2]), reverse=True)
+    by_min_side_desc = sorted(indices, key=lambda i: min(items[i][1], items[i][2]), reverse=True)
+    by_height_desc = sorted(indices, key=lambda i: items[i][2], reverse=True)
+    by_width_desc = sorted(indices, key=lambda i: items[i][1], reverse=True)
+
+    # Interleave large-small to reduce early fragmentation
+    interleave_area = []
+    lo, hi = 0, len(by_area_desc) - 1
+    toggle = True
+    while lo <= hi:
+        interleave_area.append(by_area_desc[hi] if toggle else by_area_desc[lo])
+        if toggle:
+            hi -= 1
+        else:
+            lo += 1
+        toggle = not toggle
+
+    orders_to_try = [
+        by_area_desc,
+        interleave_area,
+        by_max_side_desc,
+        by_min_side_desc,
+        by_height_desc,
+        by_width_desc,
+        by_area_asc,
+        indices,  # original order as a last resort
+    ]
+
+    # Algorithms to try (filter out Nones)
+    algos = [
+        MaxRectsBssf,
+        MaxRectsBlsf,
+        MaxRectsBaf,
+        SkylineMwFl,
+        SkylineBlWm,
+        GuillotineBssfSas,
+        GuillotineBafSas,
+    ]
+    algos = [a for a in algos if a is not None]
+
+    # Sort algorithms available in rectpack
+    sort_algos = []
+    for name in dir(_rectpack_mod):
+        if name.startswith("SORT_"):
+            sort_algos.append(getattr(_rectpack_mod, name))
+    # Ensure deterministic preference
+    if SORT_AREA in sort_algos:
+        sort_algos.remove(SORT_AREA)
+        sort_algos.insert(0, SORT_AREA)
+
+    # Bin sizes to try: expanded first, then exact plus one-sided expansions
+    expanded_w = eff_w + (spacing_pt if spacing_pt > 0 else 0)
+    expanded_h = eff_h + (spacing_pt if spacing_pt > 0 else 0)
+
+    portrait = (eff_w, eff_h)
+    portrait_x = (expanded_w, eff_h)
+    portrait_y = (eff_w, expanded_h)
+    portrait_xy = (expanded_w, expanded_h)
+
+    landscape = (eff_h, eff_w)
+    landscape_x = (expanded_h, eff_w)
+    landscape_y = (eff_h, expanded_w)
+    landscape_xy = (expanded_h, expanded_w)
+
+    def bin_patterns_for(bins_count: int):
+        # Generate a small set of candidate per-bin orientation patterns
+        base = []
+        # All portrait variants
+        base.append([portrait_xy] * bins_count)
+        base.append([portrait] * bins_count)
+        base.append([portrait_x] * bins_count)
+        base.append([portrait_y] * bins_count)
+        # All landscape variants
+        base.append([landscape_xy] * bins_count)
+        base.append([landscape] * bins_count)
+        base.append([landscape_x] * bins_count)
+        base.append([landscape_y] * bins_count)
+        # Mixed patterns
+        mix1 = []
+        for i in range(bins_count):
+            mix1.append(portrait_xy if i % 2 == 0 else landscape_xy)
+        base.append(mix1)
+        if bins_count >= 2:
+            base.append([portrait_xy] + [landscape_xy] * (bins_count - 1))
+            base.append([landscape_xy] + [portrait_xy] * (bins_count - 1))
+        return base
+
+    # Shrink epsilon to avoid failed fits due to floating point rounding
+    EPS = min(0.25, spacing_pt * 0.1)  # up to 0.25pt, 10% of spacing
+
+    # Explore slight global downscales; keep 1.0 first (no scale)
+    scales_to_try = [1.0, 0.995, 0.99, 0.985, 0.98, 0.975, 0.97]
+
     for bins in range(1, len(items) + 1):
-        for rotate in (False, True):
-            pk = newPacker(rotation=rotate, pack_algo=MaxRectsBssf, sort_algo=SORT_AREA)
-            for idx, (_, w, h) in enumerate(items):
-                # pad each snippet on its trailing edges only
-                pk.add_rect(w + spacing_pt, h + spacing_pt, rid=idx)
-            for _ in range(bins):
-                pk.add_bin(eff_w, eff_h)
-            pk.pack()
-            if len(pk.rect_list()) == len(items):
-                return pk, rotate
+        # Prefer allowing rotation when minimizing the number of sheets
+        for rotate in (True, False):
+            for pack_algo in algos:
+                for sort_algo in sort_algos:
+                    for scale in scales_to_try:
+                        for bin_list in bin_patterns_for(bins):
+                            pk = newPacker(rotation=rotate, pack_algo=pack_algo, sort_algo=sort_algo)
+                            for idx in range(len(items)):
+                                _, w, h = items[idx]
+                                # Pad only trailing edges (right and bottom), and shrink slightly
+                                pk.add_rect(max(0.0, w * scale + spacing_pt - EPS),
+                                            max(0.0, h * scale + spacing_pt - EPS), rid=idx)
+                            for bw, bh in bin_list:
+                                pk.add_bin(bw, bh)
+                            pk.pack()
+                            if len(pk.rect_list()) == len(items):
+                                # Annotate packer with orientation and scale used for rendering
+                                orientation_swapped = any(
+                                    (_float_equal(bw, eff_h) and _float_equal(bh, eff_w)) or
+                                    (_float_equal(bw, expanded_h) and _float_equal(bh, expanded_w)) or
+                                    (_float_equal(bw, expanded_h) and _float_equal(bh, eff_w)) or
+                                    (_float_equal(bw, eff_h) and _float_equal(bh, expanded_w))
+                                    for bw, bh in bin_list
+                                )
+                                setattr(pk, "__bin_orientation_swapped__", orientation_swapped)
+                                setattr(pk, "__global_scale__", scale)
+                                return pk, rotate
     raise RuntimeError("Packing failed – snippets larger than page minus margins.")
 
 
-def rect_rotated(rect, w0, h0, spacing_pt):
+def rect_rotated(rect, w0, h0, spacing_pt, scale: float = 1.0):
     w_r = rect.width  - spacing_pt
     h_r = rect.height - spacing_pt
-    return abs(w_r - h0) < 0.1 and abs(h_r - w0) < 0.1
+    return (abs(w_r - h0 * scale) < 0.1 and abs(h_r - w0 * scale) < 0.1)
 
 
 def render_pdf(packer, items, page_w, page_h, margin_pt, spacing_pt, rotate_used, output):
+    # If packing was done with landscape-oriented bins, prefer to emit landscape pages
+    use_landscape = bool(getattr(packer, "__bin_orientation_swapped__", False))
+    if use_landscape and page_h > page_w:
+        page_w, page_h = page_h, page_w
+
+    scale = float(getattr(packer, "__global_scale__", 1.0))
+
     out = fitz.open()
     for _ in packer:
         out.new_page(width=page_w, height=page_h)
@@ -160,8 +312,9 @@ def render_pdf(packer, items, page_w, page_h, margin_pt, spacing_pt, rotate_used
         for rect in abin:
             x, y, _, _, rid = rect.x, rect.y, rect.width, rect.height, rect.rid
             img_path, w_orig, h_orig = items[rid]
-            rotated = rotate_used and rect_rotated(rect, w_orig, h_orig, spacing_pt)
-            cw, ch = (h_orig, w_orig) if rotated else (w_orig, h_orig)
+            rotated = rotate_used and rect_rotated(rect, w_orig, h_orig, spacing_pt, scale)
+            cw0, ch0 = (h_orig, w_orig) if rotated else (w_orig, h_orig)
+            cw, ch = cw0 * scale, ch0 * scale
 
             # Only use packer padding: no extra spacing at edges
             x0 = margin_pt + x
