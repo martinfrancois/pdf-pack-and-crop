@@ -15,25 +15,6 @@ Pack-and-Crop
 import sys, io, argparse, tempfile
 import fitz                               # PyMuPDF
 from pathlib import Path
-
-# Ensure we always have a valid PIL.Image module
-def _get_valid_image_module():
-    """Get a valid PIL.Image module, handling cases where modules might be corrupted."""
-    try:
-        import PIL.Image as img
-        # Test if it's working
-        img.new('RGB', (1, 1))
-        return img
-    except:
-        # If PIL.Image doesn't work, clean up and reimport
-        for mod in list(sys.modules.keys()):
-            if mod.startswith('PIL'):
-                sys.modules.pop(mod, None)
-        import PIL.Image as img
-        return img
-
-Image = _get_valid_image_module()
-
 from rectpack import newPacker, MaxRectsBssf, SORT_AREA
 
 # --------------------------------------------------------------------------- #
@@ -85,22 +66,6 @@ def gather_pdfs(paths: list[str]) -> list[Path]:
 
 def crop_pages(pdf_paths, tmpdir, dpi, white_thresh):
     """Rasterise each page, crop near-white margins, save as PNG."""
-    # Get a valid Image module for this function
-    Image = _get_valid_image_module()
-    
-    # Also try to fix any broken Image modules in sys.modules
-    # This is a workaround for tests that might have corrupted Image references
-    for name, module in list(sys.modules.items()):
-        if name == 'PIL.Image' or (hasattr(module, '__name__') and module.__name__ == 'Image'):
-            if not hasattr(module, 'open'):
-                # This module is broken, try to fix it by copying attributes from working module
-                try:
-                    for attr in dir(Image):
-                        if not attr.startswith('_'):
-                            setattr(module, attr, getattr(Image, attr))
-                except:
-                    pass
-    
     items = []
     for pdf in pdf_paths:
         doc = fitz.open(pdf)
@@ -108,26 +73,59 @@ def crop_pages(pdf_paths, tmpdir, dpi, white_thresh):
         for i in range(doc.page_count):
             page  = doc.load_page(i)
             pix   = page.get_pixmap(dpi=dpi, alpha=False)
-            img   = Image.open(io.BytesIO(pix.tobytes("png")))
-            bw    = img.convert("L").point(lambda x: 0 if x > white_thresh else 255, "1")
-            bbox  = bw.getbbox()
-            if bbox:
-                img = img.crop(bbox)
-            w_px, h_px = img.size
-            w_pt, h_pt = w_px * 72 / dpi, h_px * 72 / dpi
-            out_png = Path(tmpdir) / f"{pdf_stem}_{len(items)}.png"
             
-            # Save to bytes buffer first, then write to file
-            # This avoids potential issues with PIL's save method when modules are corrupted
-            buffer = io.BytesIO()
-            img.save(buffer, format="PNG")
-            buffer.seek(0)
+            # Convert to grayscale for finding crop bounds
+            # PyMuPDF can do this without PIL
+            gray_pix = fitz.Pixmap(fitz.csGRAY, pix)
             
-            # Write the bytes directly to file
-            with open(out_png, 'wb') as f:
-                f.write(buffer.getvalue())
+            # Find the bounding box of non-white pixels
+            # We'll scan the image data to find bounds
+            width, height = gray_pix.width, gray_pix.height
+            samples = gray_pix.samples  # Raw pixel data
+            
+            # Find bounds - match PIL's behavior by treating pixels > white_thresh as white
+            min_x, min_y = width, height
+            max_x, max_y = -1, -1
+            found_content = False
+            
+            for y in range(height):
+                for x in range(width):
+                    # Get pixel value (0-255)
+                    pixel_value = samples[y * width + x]
+                    if pixel_value <= white_thresh:  # Non-white pixel
+                        found_content = True
+                        min_x = min(min_x, x)
+                        min_y = min(min_y, y)
+                        max_x = max(max_x, x)
+                        max_y = max(max_y, y)
+            
+            if found_content and min_x <= max_x and min_y <= max_y:
+                # Crop the pixmap using PyMuPDF
+                # PyMuPDF crops by getting a sub-pixmap from a rectangle
+                # PIL's getbbox returns (left, top, right, bottom) where right and bottom are exclusive
+                crop_rect = fitz.IRect(min_x, min_y, max_x + 1, max_y + 1)
+                # Get the cropped pixmap by creating a new one from the cropped area
+                cropped_pix = fitz.Pixmap(fitz.csRGB, crop_rect, False)
+                cropped_pix.copy(pix, crop_rect)
+                
+                w_px, h_px = cropped_pix.width, cropped_pix.height
+                w_pt, h_pt = w_px * 72 / dpi, h_px * 72 / dpi
+                out_png = Path(tmpdir) / f"{pdf_stem}_{len(items)}.png"
+                cropped_pix.save(str(out_png))
+                cropped_pix = None  # Free memory
+            else:
+                # No crop needed or empty page, save original
+                w_px, h_px = pix.width, pix.height
+                w_pt, h_pt = w_px * 72 / dpi, h_px * 72 / dpi
+                out_png = Path(tmpdir) / f"{pdf_stem}_{len(items)}.png"
+                pix.save(str(out_png))
             
             items.append((str(out_png), w_pt, h_pt))
+            
+            # Clean up
+            gray_pix = None
+            pix = None
+                
     return items
 
 
