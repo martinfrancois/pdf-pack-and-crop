@@ -28,6 +28,7 @@ def _reload_modules():
 ])
 def test_pack_and_crop_labels_various(tmp_path, label_nums, expected_pages):
     import importlib
+    import sys  # Add sys import here
     from PIL import Image
 
     # Reload modules to avoid stubs
@@ -35,6 +36,9 @@ def test_pack_and_crop_labels_various(tmp_path, label_nums, expected_pages):
     fitz = pytest.importorskip('fitz')
     if getattr(fitz, '__is_stub__', False):
         pytest.skip('fitz stubbed', allow_module_level=True)
+    
+    # Re-import Image after _reload_modules to get a fresh, working module
+    from PIL import Image
 
     # Reload the script under test
     import pack_and_crop as cp
@@ -58,6 +62,14 @@ def test_pack_and_crop_labels_various(tmp_path, label_nums, expected_pages):
     # Generate expected cropped image hashes
     with tempfile.TemporaryDirectory() as td:
         items = cp.crop_pages(input_paths, td, 300, 250)
+        
+        # Ensure we have a fresh Image module for opening the files
+        # This is needed because module reloading can corrupt PIL's state
+        for mod in list(sys.modules.keys()):
+            if mod.startswith('PIL'):
+                sys.modules.pop(mod, None)
+        from PIL import Image
+        
         expected_hashes = {
             hashlib.md5(Image.open(p).convert('RGB').tobytes()).hexdigest()
             for p, _, _ in items
