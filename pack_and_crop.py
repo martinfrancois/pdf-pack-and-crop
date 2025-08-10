@@ -104,7 +104,7 @@ def crop_pages(pdf_paths, tmpdir, dpi, white_thresh):
                 # PyMuPDF crops by getting a sub-pixmap from a rectangle
                 # PIL's getbbox returns (left, top, right, bottom) where right and bottom are exclusive
                 crop_rect = fitz.IRect(min_x, min_y, max_x + 1, max_y + 1)
-                # Get the cropped pixmap by creating a new one from the cropped area
+                # Get the cropped pixmap by creating a new one from the cropped area (compat mode)
                 cropped_pix = fitz.Pixmap(fitz.csRGB, crop_rect, False)
                 cropped_pix.copy(pix, crop_rect)
                 
@@ -130,18 +130,349 @@ def crop_pages(pdf_paths, tmpdir, dpi, white_thresh):
 
 
 def find_minimal_packing(items, eff_w, eff_h, spacing_pt):
-    """Return (packer, rotate_used) that fits everything in as few sheets as possible."""
-    for bins in range(1, len(items) + 1):
-        for rotate in (False, True):
-            pk = newPacker(rotation=rotate, pack_algo=MaxRectsBssf, sort_algo=SORT_AREA)
+    """Return (packer, rotate_used) that fits everything in as few sheets as possible.
+
+    Tries multiple packing algorithms and sort strategies for each bin count
+    to find a feasible solution as early as possible (lowest sheet count).
+    Falls back gracefully if certain algorithms are unavailable (e.g. in tests).
+    Additionally, explores multiple input orders (heuristics + random shuffles)
+    under SORT_NONE to improve chances of tighter packings.
+    Also tries both page orientations (portrait and landscape) and uses the
+    one that yields the fewest sheets.
+    """
+    # ---------------------------- Custom shelf packer ---------------------------- #
+    # Lightweight classes to mimic rectpack's interface
+    class SimpleRect:
+        def __init__(self, x, y, width, height, rid):
+            self.x = x
+            self.y = y
+            self.width = width
+            self.height = height
+            self.rid = rid
+
+    class SimpleBin:
+        def __init__(self):
+            self._rects: list[SimpleRect] = []
+        def add(self, rect: SimpleRect):
+            self._rects.append(rect)
+        def __iter__(self):
+            return iter(self._rects)
+
+    class SimplePacker:
+        def __init__(self, bins: list[SimpleBin], orientations: list[str]):
+            self._bins = bins
+            self._page_orientations = orientations
+        def __iter__(self):
+            return (b for b in self._bins)
+        def __len__(self):
+            return len(self._bins)
+        def rect_list(self):
+            return [r for b in self._bins for r in b]
+
+    def try_shelf_pack(num_bins: int, page_w: float, page_h: float, allow_rotate: bool,
+                        orders: list[list[int]], orientations: list[str]):
+        # page_w/page_h are the effective packing area sizes (may include +spacing to avoid edge spacing)
+        def pack_one_page(order: list[int], items_local: list[tuple], bins_needed: int) -> SimplePacker | None:
+            bins: list[SimpleBin] = [SimpleBin() for _ in range(bins_needed)]
+            # For each bin, maintain shelves: (y_offset_top, shelf_height, x_offset)
+            shelves = [
+                []  # list of dicts per page: [{'y': float, 'h': float, 'x': float}]
+                for _ in range(bins_needed)
+            ]
+            used_heights = [0.0 for _ in range(bins_needed)]
+
+            for idx in order:
+                _, w0, h0 = items_local[idx]
+                placed = False
+                # Try to place on any existing page
+                for p in range(bins_needed):
+                    # Try both orientations if allowed; prefer non-rotated first
+                    candidate_dims = [(w0, h0)]
+                    if allow_rotate:
+                        candidate_dims.append((h0, w0))
+                    # Try to place on existing shelves first
+                    for (cw, ch) in candidate_dims:
+                        ew, eh = cw, ch
+                        # Add trailing spacing by inflating block size
+                        ew_eff = ew + spacing_pt
+                        eh_eff = eh + spacing_pt
+                        # Try existing shelves
+                        for sh in shelves[p]:
+                            if eh_eff <= sh['h']:
+                                # fits height of shelf; check remaining width
+                                if sh['x'] + ew_eff <= page_w + 1e-6:
+                                    # place here
+                                    rect = SimpleRect(sh['x'], sh['y'], ew_eff, eh_eff, idx)
+                                    bins[p].add(rect)
+                                    sh['x'] += ew_eff
+                                    placed = True
+                                    break
+                        if placed:
+                            break
+                        # Try to grow last shelf height if any
+                        if shelves[p]:
+                            sh = shelves[p][-1]
+                            new_h = max(sh['h'], eh_eff)
+                            delta = new_h - sh['h']
+                            if used_heights[p] + delta <= page_h + 1e-6 and sh['x'] + ew_eff <= page_w + 1e-6:
+                                sh['h'] = new_h
+                                used_heights[p] += delta
+                                rect = SimpleRect(sh['x'], sh['y'], ew_eff, eh_eff, idx)
+                                bins[p].add(rect)
+                                sh['x'] += ew_eff
+                                placed = True
+                                break
+                        # Start a new shelf if space remains
+                        if used_heights[p] + eh_eff <= page_h + 1e-6:
+                            y_top = used_heights[p]
+                            shelves[p].append({'y': y_top, 'h': eh_eff, 'x': 0.0})
+                            used_heights[p] += eh_eff
+                            rect = SimpleRect(0.0, y_top, ew_eff, eh_eff, idx)
+                            bins[p].add(rect)
+                            shelves[p][-1]['x'] = ew_eff
+                            placed = True
+                            break
+                    if placed:
+                        break
+                if not placed:
+                    return None
+
+            return SimplePacker(bins, orientations)
+
+        # Try each order once for given bin count / page size
+        for order in orders:
+            packer = pack_one_page(order, items, num_bins)
+            if packer is not None:
+                return packer
+        return None
+
+    # Lazy import full rectpack namespace to probe available algorithms safely
+    try:
+        import rectpack as rp
+    except Exception:  # pragma: no cover - should always be importable in app/tests
+        rp = None
+
+    # Candidate packing algorithms in priority order
+    pack_algo_names_priority = [
+        'MaxRectsBssf', 'MaxRectsBlsf', 'MaxRectsBl', 'MaxRectsBaf',
+        'SkylineMwflWm', 'SkylineMwfl', 'SkylineMwfWm', 'SkylineMwf',
+        'SkylineBlWm', 'SkylineBl',
+        'GuillotineBssfLas', 'GuillotineBssfSlas',
+        'GuillotineBlsfLas', 'GuillotineBlsfSlas',
+        'GuillotineBafLas', 'GuillotineBafSlas',
+    ]
+
+    # Candidate sort algorithms in priority order
+    sort_algo_names_priority = [
+        'SORT_NONE', 'SORT_AREA', 'SORT_PERI', 'SORT_RATIO', 'SORT_SSIDE', 'SORT_LSIDE', 'SORT_DIFF'
+    ]
+
+    def resolve_algorithms():
+        pack_algos = []
+        sort_algos = []
+        # Always include MaxRectsBssf via direct import to stay compatible with stubs
+        pack_algos.append(MaxRectsBssf)
+        sort_algos.append(SORT_AREA)
+        if rp is not None:
+            # Extend with any other available algorithms
+            for name in pack_algo_names_priority:
+                if hasattr(rp, name):
+                    algo = getattr(rp, name)
+                    if algo is not MaxRectsBssf and algo not in pack_algos:
+                        pack_algos.append(algo)
+            # Extend with available sort strategies
+            for name in sort_algo_names_priority:
+                if hasattr(rp, name):
+                    algo = getattr(rp, name)
+                    if algo is not SORT_AREA and algo not in sort_algos:
+                        sort_algos.append(algo)
+        return pack_algos, sort_algos
+
+    pack_algos, sort_algos = resolve_algorithms()
+
+    # Build candidate orders for SORT_NONE attempts
+    import random
+    idxs = list(range(len(items)))
+    sizes = [(w, h) for _, w, h in items]
+    areas = [w * h for w, h in sizes]
+
+    def candidate_orders(max_random: int = 12):
+        orders = []
+        # Deterministic heuristics
+        orders.append(sorted(idxs, key=lambda i: -areas[i]))
+        orders.append(sorted(idxs, key=lambda i: -max(sizes[i])))
+        orders.append(sorted(idxs, key=lambda i: -sizes[i][0]))  # width desc
+        orders.append(sorted(idxs, key=lambda i: -sizes[i][1]))  # height desc
+        orders.append(sorted(idxs, key=lambda i: (sizes[i][0], sizes[i][1]), reverse=True))
+        orders.append(list(idxs))
+        orders.append(list(reversed(idxs)))
+        # Random shuffles
+        rng = random.Random(1337)
+        for _ in range(max_random):
+            arr = list(idxs)
+            rng.shuffle(arr)
+            orders.append(arr)
+        # Deduplicate while preserving order
+        seen = set()
+        uniq = []
+        for ord_ in orders:
+            t = tuple(ord_)
+            if t not in seen:
+                seen.add(t)
+                uniq.append(ord_)
+        return uniq
+
+    orders_for_none = candidate_orders()
+
+    def try_pack(bins, rotate, pack_algo, sort_algo, bin_sizes, orientations, order=None):
+        pk = newPacker(rotation=rotate, pack_algo=pack_algo, sort_algo=sort_algo)
+        if order is None:
+            # Default path uses rectpack's own sorting
             for idx, (_, w, h) in enumerate(items):
-                # pad each snippet on its trailing edges only
                 pk.add_rect(w + spacing_pt, h + spacing_pt, rid=idx)
-            for _ in range(bins):
-                pk.add_bin(eff_w, eff_h)
-            pk.pack()
-            if len(pk.rect_list()) == len(items):
-                return pk, rotate
+        else:
+            # Force user-defined order by using SORT_NONE and adding in that order
+            for idx in order:
+                _, w, h = items[idx]
+                pk.add_rect(w + spacing_pt, h + spacing_pt, rid=idx)
+        for (bw, bh) in bin_sizes:
+            # Enlarge the bin by the spacing to avoid forcing spacing at the right/bottom edges
+            pk.add_bin(bw, bh)
+        # Attach page orientation hints for renderer
+        try:
+            setattr(pk, "_page_orientations", orientations[:len(bin_sizes)])
+        except Exception:
+            pass
+        pk.pack()
+        return pk
+
+    # Two canonical orientations to try: portrait bins and landscape bins
+    portrait_w = eff_w + spacing_pt
+    portrait_h = eff_h + spacing_pt
+    landscape_w = eff_h + spacing_pt
+    landscape_h = eff_w + spacing_pt
+
+    def bin_orientation_patterns(n):
+        # Yield sequences of 'portrait'/'landscape' of length n, prioritized
+        if n <= 0:
+            return []
+        patterns = []
+        # All portrait, all landscape first
+        patterns.append(["portrait"] * n)
+        patterns.append(["landscape"] * n)
+        # Then balanced mixes: alternate starting with portrait and landscape
+        patterns.append(["portrait" if i % 2 == 0 else "landscape" for i in range(n)])
+        patterns.append(["landscape" if i % 2 == 0 else "portrait" for i in range(n)])
+        # Then for k from 1..n-1, k portrait then rest landscape, and vice versa
+        for k in range(1, n):
+            patterns.append(["portrait"] * k + ["landscape"] * (n - k))
+            patterns.append(["landscape"] * k + ["portrait"] * (n - k))
+        # Deduplicate while preserving order
+        uniq = []
+        seen = set()
+        for pat in patterns:
+            t = tuple(pat)
+            if t not in seen:
+                seen.add(t)
+                uniq.append(pat)
+        return uniq
+
+    for bins in range(1, len(items) + 1):
+        # Phase 0: Try our custom shelf packer first (fast) with a set of heuristic orders
+        import random
+        idxs = list(range(len(items)))
+        sizes = [(w, h) for _, w, h in items]
+        areas = [w * h for w, h in sizes]
+        heuristic_orders = [
+            sorted(idxs, key=lambda i: -areas[i]),
+            sorted(idxs, key=lambda i: -max(sizes[i])),
+            sorted(idxs, key=lambda i: -sizes[i][1]),  # height desc
+            sorted(idxs, key=lambda i: -sizes[i][0]),  # width desc
+            list(idxs),
+            list(reversed(idxs)),
+        ]
+        rng0 = random.Random(4242)
+        for _ in range(10):
+            arr = list(idxs)
+            rng0.shuffle(arr)
+            heuristic_orders.append(arr)
+        # Deduplicate
+        seen_o = set()
+        uniq_orders = []
+        for o in heuristic_orders:
+            t = tuple(o)
+            if t not in seen_o:
+                seen_o.add(t)
+                uniq_orders.append(o)
+
+        # Try uniform page orientations first for shelf packing
+        shelf_attempts = [
+            (['portrait'] * bins, portrait_w, portrait_h),
+            (['landscape'] * bins, landscape_w, landscape_h),
+        ]
+        for orient_seq, bw, bh in shelf_attempts:
+            sp = try_shelf_pack(bins, bw, bh, allow_rotate=True, orders=uniq_orders, orientations=orient_seq)
+            if sp is not None:
+                return sp, True
+
+        for rotate in (True, False):
+            # Phase 1: intensive search with MaxRectsBssf + SORT_NONE using many randomized orders,
+            # limited orientation patterns (all portrait or all landscape). This often yields tighter packings.
+            primary_pack_algos = [a for a in pack_algos if a is MaxRectsBssf] or [MaxRectsBssf]
+            if rp is not None and hasattr(rp, 'SORT_NONE'):
+                sort_none = getattr(rp, 'SORT_NONE')
+            else:
+                sort_none = None
+            if sort_none is not None:
+                # Build heavier set of orders
+                import random
+                heavy_orders = orders_for_none + []
+                rng = random.Random(2025)
+                for _ in range(100):
+                    arr = list(range(len(items)))
+                    rng.shuffle(arr)
+                    heavy_orders.append(arr)
+                # Deduplicate
+                seen = set()
+                uniq_orders = []
+                for ord_ in heavy_orders:
+                    t = tuple(ord_)
+                    if t not in seen:
+                        seen.add(t)
+                        uniq_orders.append(ord_)
+                for pack_algo in primary_pack_algos:
+                    for orient_seq in ([['portrait'] * bins][0], [['landscape'] * bins][0]):
+                        bin_sizes = [
+                            (portrait_w, portrait_h) if o == 'portrait' else (landscape_w, landscape_h)
+                            for o in orient_seq
+                        ]
+                        # Try native order first
+                        pk = try_pack(bins, rotate, pack_algo, sort_none, bin_sizes, orientations=orient_seq)
+                        if len(pk.rect_list()) == len(items):
+                            return pk, rotate
+                        # Then randomized orders
+                        for ord_ in uniq_orders:
+                            pk2 = try_pack(bins, rotate, pack_algo, sort_none, bin_sizes, orientations=orient_seq, order=ord_)
+                            if len(pk2.rect_list()) == len(items):
+                                return pk2, rotate
+
+            # Phase 2: broader fallback over all algorithms, sorts, and mixed orientations
+            for pack_algo in pack_algos:
+                for sort_algo in sort_algos:
+                    for orient_seq in bin_orientation_patterns(bins):
+                        bin_sizes = [
+                            (portrait_w, portrait_h) if o == "portrait" else (landscape_w, landscape_h)
+                            for o in orient_seq
+                        ]
+                        # Native order
+                        pk = try_pack(bins, rotate, pack_algo, sort_algo, bin_sizes, orientations=orient_seq)
+                        if len(pk.rect_list()) == len(items):
+                            return pk, rotate
+                        if rp is not None and hasattr(rp, 'SORT_NONE') and sort_algo == getattr(rp, 'SORT_NONE'):
+                            for ord_ in orders_for_none:
+                                pk2 = try_pack(bins, rotate, pack_algo, sort_algo, bin_sizes, orientations=orient_seq, order=ord_)
+                                if len(pk2.rect_list()) == len(items):
+                                    return pk2, rotate
     raise RuntimeError("Packing failed – snippets larger than page minus margins.")
 
 
@@ -153,8 +484,17 @@ def rect_rotated(rect, w0, h0, spacing_pt):
 
 def render_pdf(packer, items, page_w, page_h, margin_pt, spacing_pt, rotate_used, output):
     out = fitz.open()
-    for _ in packer:
-        out.new_page(width=page_w, height=page_h)
+    # Create pages. If the packer carries per-page orientation hints, honor them
+    page_orients = getattr(packer, "_page_orientations", None)
+    if page_orients is None:
+        for _ in packer:
+            out.new_page(width=page_w, height=page_h)
+    else:
+        for orient in page_orients:
+            if orient == "landscape":
+                out.new_page(width=page_h, height=page_w)
+            else:
+                out.new_page(width=page_w, height=page_h)
 
     for bin_idx, abin in enumerate(packer):
         for rect in abin:
@@ -165,7 +505,12 @@ def render_pdf(packer, items, page_w, page_h, margin_pt, spacing_pt, rotate_used
 
             # Only use packer padding: no extra spacing at edges
             x0 = margin_pt + x
-            y0 = page_h - (margin_pt + y + ch)
+            # Determine this page's height based on orientation
+            if page_orients is not None and page_orients[bin_idx] == "landscape":
+                this_page_h = page_w
+            else:
+                this_page_h = page_h
+            y0 = this_page_h - (margin_pt + y + ch)
 
             rect_dest = fitz.Rect(x0, y0, x0 + cw, y0 + ch)
             out[bin_idx].insert_image(rect_dest, filename=img_path, rotate=90 if rotated else 0)
