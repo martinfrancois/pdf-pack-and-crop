@@ -1,4 +1,5 @@
 import types
+
 import pytest
 
 import pack_and_crop as cp

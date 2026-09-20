@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pdf-pack-and-crop"
+version = "0.1.0"
+description = "Crop white margins from PDF pages and pack the pieces onto as few sheets as possible."
+readme = "README.md"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE.md"]
+requires-python = ">=3.10"
+dependencies = [
+    "pymupdf==1.28.2",
+    "rectpack==0.2.2",
+]
+
+[project.scripts]
+pack-and-crop = "pack_and_crop:main"
+
+[tool.setuptools]
+py-modules = ["pack_and_crop"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

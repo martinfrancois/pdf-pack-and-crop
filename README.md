@@ -16,7 +16,7 @@
 |------------------------------------------|---------------------|---------------------------------------|
 | Page size (any)                          | A4 (210 × 297 mm)   | `--pagesize WxHmm`, `A4`, `Letter`, … |
 | **Outer margin** (page border)           | 5 mm                | `--page-margin MM`                    |
-| **Inner spacing** (gap between snippets) | 5 mm                | `--spacing MM`                        |
+| **Inner spacing** (gap between snippets) | 1 mm                | `--spacing MM`                        |
 | Rasterisation                            | 300 DPI             | `--dpi N`                             |
 | Auto‑rotation                            | Enabled when useful | *(automatic)*                         |
 | Folder input                             | Yes                 | pass folder path                      |
@@ -25,9 +25,13 @@
 
 ## 📦 Requirements
 
+Python 3.10 or newer. From a clone of this repository:
+
 ```bash
-python -m pip install pymupdf pillow rectpack
-````
+python -m pip install -e .
+```
+
+This installs `pymupdf` and `rectpack` and adds the `pack-and-crop` command, which takes the same arguments as `python pack_and_crop.py`.
 
 ---
 
@@ -57,6 +61,18 @@ Output → **`final_output.pdf`** (or the name you supply).
 
 ---
 
+## Example
+
+`examples/labels` holds six single‑page A4 PDFs. Each has one 100 × 60 mm sample label in the top left corner and white space everywhere else. The text on the labels is invented, and `examples/make_labels.py` generated them.
+
+```bash
+python pack_and_crop.py examples/labels -o packed.pdf
+```
+
+`packed.pdf` is one A4 sheet with four labels upright in a left column and the other two rotated by 90° beside them.
+
+---
+
 ## How It Works
 
 1. Each page is rasterised (`--dpi`, default 300).
@@ -72,18 +88,22 @@ Output → **`final_output.pdf`** (or the name you supply).
 
 ## Running Tests
 
-Install test dependencies and run `pytest` with coverage:
+Install the tool with the test dependencies and run `pytest`:
 
 ```bash
-python -m pip install -r requirements.txt
-pytest -vv --cov=pack_and_crop.py --cov-report=term-missing
+python -m pip install -r requirements.txt -e .
+python -m pytest
 ```
 
-Integration tests need `pymupdf`, `Pillow` and `rectpack`.
+The tests crop and pack the example labels. `requirements.txt` also has `reportlab`, which `examples/make_labels.py` needs to regenerate them.
 
 ## Contributing
 
 1. Fork, hack, run `black *.py`.
 2. Include before/after PDFs or screenshots in PRs.
+
+## License
+
+AGPL‑3.0, see [`LICENSE.md`](LICENSE.md).
 
 Enjoy saving paper ♻️

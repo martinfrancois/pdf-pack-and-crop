@@ -1,9 +1,12 @@
-# Developer Notes
+# Developer notes
 
-Run tests with:
+Install and test:
 
 ```bash
-pytest -vv --cov=pack_and_crop.py --cov-report=term-missing
+python -m pip install -r requirements.txt -e .
+python -m pytest
 ```
 
-Integration tests require `pymupdf`, `Pillow`, and `rectpack` to be installed.
+The tests run the tool on the synthetic labels in `examples/labels`. Those
+PDFs come from `examples/make_labels.py`; run it again after changing it and
+commit the result.
