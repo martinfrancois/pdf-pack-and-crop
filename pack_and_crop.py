@@ -8,7 +8,7 @@ Pack-and-Crop
 • Independently configurable:
     – Target page size (default A4)
     – **Page margin** around the sheet (default 5 mm)
-    – **Spacing** between snippets (default 5 mm)
+    – **Spacing** between snippets (default 1 mm)
     – Rasterisation DPI (default 300)
 """
 
@@ -189,7 +189,7 @@ def main():
     parser.add_argument("--page-margin", type=float, default=5, metavar="MM",
                         help="Margin around page edges in mm (default 5)")
     parser.add_argument("--spacing", type=float, default=1, metavar="MM",
-                        help="Spacing between snippets in mm (default 5)")
+                        help="Spacing between snippets in mm (default 1)")
     parser.add_argument("--dpi", type=int, default=300,
                         help="Rasterisation DPI (default 300)")
     parser.add_argument("--threshold", type=int, default=250, metavar="0-255",

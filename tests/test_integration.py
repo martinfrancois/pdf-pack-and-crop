@@ -1,11 +1,8 @@
 from collections import namedtuple
 from pathlib import Path
 import tempfile
-import pytest
 
-fitz = pytest.importorskip('fitz')
-if getattr(fitz, '__is_stub__', False):
-    pytest.skip('fitz stubbed', allow_module_level=True)
+import pymupdf as fitz
 
 import pack_and_crop as cp
 

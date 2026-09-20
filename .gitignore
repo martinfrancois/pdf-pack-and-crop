@@ -651,3 +651,5 @@ cython_debug/
 
 # Custom
 *.pdf
+# Output of pack-and-crop and generated PDFs, except the committed examples
+!examples/labels/*.pdf
