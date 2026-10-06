@@ -15,15 +15,18 @@ def _reload_modules():
     sys.modules.pop('PIL.Image', None)
 
 
+# With the default A4 page, 5 mm margin and 1 mm spacing, none of labels 2, 3, 4 and 6 fits on a
+# sheet next to another label from 1 to 6 or 8, and only two of labels 1, 5 and 8 fit on one sheet.
+# A set that holds labels 1 to 6 and 8 therefore needs at least 6 sheets.
 @pytest.mark.parametrize("label_nums, expected_pages", [
     ([1], 1),
     ([1, 5], 1),
     ([1, 2, 5], 2),
     ([1, 2, 5, 10], 2),
     ([1, 2, 3, 4, 5, 6], 5),
-    ([1, 2, 3, 4, 5, 6, 8], 5),
-    ([1, 2, 3, 4, 5, 6, 8, 10], 5),
-    ([1, 2, 3, 4, 5, 6, 8, 10, 11], 5),
+    ([1, 2, 3, 4, 5, 6, 8], 6),
+    ([1, 2, 3, 4, 5, 6, 8, 10], 6),
+    ([1, 2, 3, 4, 5, 6, 8, 10, 11], 6),
     ([1, 2, 3, 4, 5, 6, 8, 9, 10, 11], 6),
 ])
 def test_pack_and_crop_labels_various(tmp_path, label_nums, expected_pages):
@@ -85,6 +88,25 @@ def test_pack_and_crop_labels_various(tmp_path, label_nums, expected_pages):
             actual_hashes.add(hashlib.md5(im.tobytes()).hexdigest())
 
     assert actual_hashes == expected_hashes, "Mismatch between cropped images and PDF contents"
+
+    # A smaller page count must come from better packing, not from shrinking a label,
+    # crossing the page margin or dropping the spacing between labels.
+    margin_pt, spacing_pt, tolerance_pt = cp.mm_to_pt(5), cp.mm_to_pt(1), 0.5
+    cropped_sizes = sorted(sorted((round(w, 1), round(h, 1))) for _, w, h in items)
+    placed_sizes = []
+    for page in doc:
+        boxes = [fitz.Rect(info['bbox']) for info in page.get_image_info()]
+        placed_sizes.extend(sorted((round(box.width, 1), round(box.height, 1))) for box in boxes)
+        for box in boxes:
+            assert box.x0 >= margin_pt - tolerance_pt and box.y0 >= margin_pt - tolerance_pt
+            assert box.x1 <= page.rect.width - margin_pt + tolerance_pt
+            assert box.y1 <= page.rect.height - margin_pt + tolerance_pt
+        for i, first in enumerate(boxes):
+            for second in boxes[i + 1:]:
+                gap = max(second.x0 - first.x1, first.x0 - second.x1,
+                          second.y0 - first.y1, first.y0 - second.y1)
+                assert gap >= spacing_pt - tolerance_pt
+    assert sorted(placed_sizes) == cropped_sizes, "A label was scaled on the sheet"
 
     # Verify each input file is represented in the cropped output
     represented = {Path(p).stem.split('_', 1)[0] for p, _, _ in items}
