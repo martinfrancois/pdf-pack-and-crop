@@ -15,9 +15,18 @@ def _reload_modules():
     sys.modules.pop('PIL.Image', None)
 
 
-# With the default A4 page, 5 mm margin and 1 mm spacing, none of labels 2, 3, 4 and 6 fits on a
-# sheet next to another label from 1 to 6 or 8, and only two of labels 1, 5 and 8 fit on one sheet.
-# A set that holds labels 1 to 6 and 8 therefore needs at least 6 sheets.
+# The expected page counts and the geometry checks depend on these, so the test passes them to the CLI
+# instead of relying on its defaults.
+PAGE_SIZE = "A4"
+PAGE_MARGIN_MM = 5
+SPACING_MM = 1
+DPI = 300
+WHITE_THRESHOLD = 250
+
+
+# With these settings, none of labels 2, 3, 4 and 6 fits on a sheet next to another label from
+# 1 to 6 or 8, and only two of labels 1, 5 and 8 fit on one sheet. A set that holds labels 1 to 6
+# and 8 therefore needs at least 6 sheets.
 @pytest.mark.parametrize("label_nums, expected_pages", [
     ([1], 1),
     ([1, 5], 1),
@@ -53,7 +62,9 @@ def test_pack_and_crop_labels_various(tmp_path, label_nums, expected_pages):
     output_pdf = tmp_path / f"out_{'_'.join(map(str, label_nums))}.pdf"
 
     # Run the CLI pack_and_crop
-    cmd = [sys.executable, str(repo_root / 'pack_and_crop.py'), *map(str, input_paths), '-o', str(output_pdf)]
+    cmd = [sys.executable, str(repo_root / 'pack_and_crop.py'), *map(str, input_paths),
+           '--pagesize', PAGE_SIZE, '--page-margin', str(PAGE_MARGIN_MM), '--spacing', str(SPACING_MM),
+           '--dpi', str(DPI), '--threshold', str(WHITE_THRESHOLD), '-o', str(output_pdf)]
     subprocess.run(cmd, check=True, cwd=repo_root)
 
     # Verify total pages in generated PDF
@@ -64,7 +75,7 @@ def test_pack_and_crop_labels_various(tmp_path, label_nums, expected_pages):
 
     # Generate expected cropped image hashes
     with tempfile.TemporaryDirectory() as td:
-        items = cp.crop_pages(input_paths, td, 300, 250)
+        items = cp.crop_pages(input_paths, td, DPI, WHITE_THRESHOLD)
         
         # Ensure we have a fresh Image module for opening the files
         # This is needed because module reloading can corrupt PIL's state
@@ -91,7 +102,7 @@ def test_pack_and_crop_labels_various(tmp_path, label_nums, expected_pages):
 
     # A smaller page count must come from better packing, not from shrinking a label,
     # crossing the page margin or dropping the spacing between labels.
-    margin_pt, spacing_pt, tolerance_pt = cp.mm_to_pt(5), cp.mm_to_pt(1), 0.5
+    margin_pt, spacing_pt, tolerance_pt = cp.mm_to_pt(PAGE_MARGIN_MM), cp.mm_to_pt(SPACING_MM), 0.5
     cropped_sizes = sorted(sorted((round(w, 1), round(h, 1))) for _, w, h in items)
     placed_sizes = []
     for page in doc:
