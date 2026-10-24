@@ -116,6 +116,5 @@ def test_find_minimal_packing_many_small():
 
 def test_find_minimal_packing_too_big():
     items = [("big", 100, 100)]
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="Packing failed"):
         cp.find_minimal_packing(items, 50, 50, 0)
-
