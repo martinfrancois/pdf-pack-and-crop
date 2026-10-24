@@ -1,75 +1,71 @@
 import sys
-import types
+
 import pytest
 
-import crop_and_pack as cp
+import pack_and_crop as cp
+
+SHEET_PT = 100
 
 
-class DummyRect:
-    def __init__(self, x=0, y=0, width=0, height=0, rid=0):
-        self.x, self.y, self.width, self.height, self.rid = x, y, width, height, rid
+@pytest.fixture
+def real_rectpack(monkeypatch):
+    # test_core.py can leave a one-column rectpack stub in sys.modules, and these layouts need the real packer
+    if getattr(sys.modules.get('rectpack'), '__is_stub__', False):
+        monkeypatch.delitem(sys.modules, 'rectpack')
+    rectpack = pytest.importorskip('rectpack')
+    for name in ('newPacker', 'MaxRectsBssf', 'SORT_AREA'):
+        monkeypatch.setattr(cp, name, getattr(rectpack, name))
 
 
-class MultiBinPacker:
-    def __init__(self, rotation=False, pack_algo=None, sort_algo=None):
-        self.rotation = rotation
-        self.rects = []
-        self.bins = []
+def test_find_minimal_packing_puts_many_small_snippets_on_one_sheet(real_rectpack):
+    side = SHEET_PT / 5
+    snippets = [(f'small{i}', side, side) for i in range(12)]
 
-    def add_rect(self, w, h, rid=None):
-        self.rects.append((w, h, rid))
+    packer, rotated = cp.find_minimal_packing(snippets, SHEET_PT, SHEET_PT, 0)
 
-    def add_bin(self, w, h):
-        self.bins.append({'w': w, 'h': h, 'used': 0, 'rects': []})
-
-    def pack(self):
-        for w, h, rid in self.rects:
-            placed = False
-            for bin in self.bins:
-                if w <= bin['w'] and bin['used'] + h <= bin['h']:
-                    bin['rects'].append(DummyRect(0, bin['used'], w, h, rid))
-                    bin['used'] += h
-                    placed = True
-                    break
-                if self.rotation and h <= bin['w'] and bin['used'] + w <= bin['h']:
-                    bin['rects'].append(DummyRect(0, bin['used'], h, w, rid))
-                    bin['used'] += w
-                    placed = True
-                    break
-            if not placed:
-                for b in self.bins:
-                    b['rects'] = []
-                break
-        self._rects = [r for b in self.bins for r in b['rects']]
-
-    def rect_list(self):
-        return self._rects
-
-    def __iter__(self):
-        for b in self.bins:
-            yield b['rects']
+    assert rotated is False
+    assert len(list(packer)) == 1
+    assert len(packer.rect_list()) == len(snippets)
 
 
-@pytest.fixture(autouse=True)
-def patch_packer(monkeypatch):
-    monkeypatch.setattr(cp, 'newPacker', lambda **kw: MultiBinPacker(**kw))
+def test_find_minimal_packing_adds_sheets_until_everything_fits(real_rectpack):
+    side = SHEET_PT * 0.6
+    snippets = [(f'large{i}', side, side) for i in range(3)]
+
+    packer, rotated = cp.find_minimal_packing(snippets, SHEET_PT, SHEET_PT, 0)
+
+    assert rotated is False
+    assert len(list(packer)) == len(snippets)
+    assert len(packer.rect_list()) == len(snippets)
 
 
-def test_find_minimal_packing_many_small_pdfs():
-    items = [(f'im{i}', 20, 20) for i in range(12)]
-    pk, rot = cp.find_minimal_packing(items, 100, 100, 0)
-    assert rot is False
-    assert len(list(pk)) == 3
+@pytest.mark.parametrize('spacing_pt, expected_sheets', [(0, 1), (1, 2)])
+def test_find_minimal_packing_pads_snippets_by_the_spacing(real_rectpack, spacing_pt, expected_sheets):
+    side = SHEET_PT / 2
+    snippets = [('left', side, side), ('right', side, side)]
+
+    packer, rotated = cp.find_minimal_packing(snippets, SHEET_PT, SHEET_PT, spacing_pt)
+
+    assert rotated is False
+    assert len(list(packer)) == expected_sheets
+    assert all(
+        (rect.width, rect.height) == (side + spacing_pt, side + spacing_pt)
+        for sheet in packer
+        for rect in sheet
+    )
 
 
-def test_find_minimal_packing_only_big_pdfs():
-    items = [('big1', 150, 150), ('big2', 120, 120)]
-    with pytest.raises(RuntimeError):
-        cp.find_minimal_packing(items, 100, 100, 0)
+def test_find_minimal_packing_raises_when_a_snippet_is_larger_than_the_sheet():
+    snippets = [('fits', SHEET_PT / 2, SHEET_PT / 2), ('too_big', SHEET_PT * 1.5, SHEET_PT * 1.5)]
+
+    with pytest.raises(RuntimeError, match='Packing failed'):
+        cp.find_minimal_packing(snippets, SHEET_PT, SHEET_PT, 0)
 
 
-def test_find_minimal_packing_requires_rotation():
-    items = [('rot', 120, 80)]
-    pk, rot = cp.find_minimal_packing(items, 80, 120, 0)
-    assert rot is True
-    assert len(list(pk)) == 1
+def test_find_minimal_packing_rotates_a_snippet_that_only_fits_sideways():
+    snippets = [('wide', 120, 80)]
+
+    packer, rotated = cp.find_minimal_packing(snippets, 80, 120, 0)
+
+    assert rotated is True
+    assert len(list(packer)) == 1
