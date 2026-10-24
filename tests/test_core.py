@@ -1,19 +1,26 @@
+import importlib.util
 import sys
 import types
 from pathlib import Path
 import pytest
 
+
+def _absent(name):
+    # find_spec raises ValueError for a stub already in sys.modules, so check that first.
+    return name not in sys.modules and importlib.util.find_spec(name) is None
+
+
 # Create stubs for optional libraries when absent
-if 'fitz' not in sys.modules:
+if _absent('fitz'):
     sys.modules['fitz'] = types.ModuleType('fitz')
     sys.modules['fitz'].__is_stub__ = True
-if 'PIL' not in sys.modules:
+if _absent('PIL'):
     pil = types.ModuleType('PIL')
     image_mod = types.ModuleType('Image')
     pil.Image = image_mod
     sys.modules['PIL'] = pil
     sys.modules['PIL.Image'] = image_mod
-if 'rectpack' not in sys.modules:
+if _absent('rectpack'):
     rectpack = types.ModuleType('rectpack')
     rectpack.__is_stub__ = True
     class DummyRect:
