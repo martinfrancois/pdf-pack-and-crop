@@ -31,10 +31,39 @@ def _orientation_free_size(width, height):
     return tuple(sorted((width, height)))
 
 
+def _size_difference(first, second):
+    return max(abs(a - b) for a, b in zip(first, second))
+
+
+def _pair_sizes(cropped_sizes, placed_sizes):
+    # Labels can share a side (3 and 6 are both 500.16 pt wide), so float noise on that side can
+    # reorder sorted sizes and pair one label with another's size. Taking the closest pairs first
+    # keeps each label with its own size while different sizes differ by more than twice the noise.
+    candidates = sorted((_size_difference(cropped, placed), c, p)
+                        for c, cropped in enumerate(cropped_sizes)
+                        for p, placed in enumerate(placed_sizes))
+    used_cropped, used_placed, pairs = set(), set(), []
+    for _, c, p in candidates:
+        if c not in used_cropped and p not in used_placed:
+            used_cropped.add(c)
+            used_placed.add(p)
+            pairs.append((cropped_sizes[c], placed_sizes[p]))
+    return pairs
+
+
+def test_pair_sizes_keeps_labels_apart_when_noise_reorders_a_shared_side():
+    # PyMuPDF reports placed sizes as float32, so label 6 can come out a hair narrower than
+    # label 3 and sort ahead of it.
+    label3, label6 = (500.16, 640.8), (500.16, 743.28)
+    placed3, placed6 = (500.16003227233887, 640.7999877929688), (500.15997314453125, 743.2799682617188)
+    assert sorted(_pair_sizes([label3, label6], [placed3, placed6])) == [
+        (label3, placed3), (label6, placed6)]
+
+
 def _assert_labels_unscaled_inside_margin_and_spaced(doc, items, margin_pt, spacing_pt):
     import fitz  # the caller has already replaced any stub with the real module
 
-    cropped_sizes = sorted(_orientation_free_size(w, h) for _, w, h in items)
+    cropped_sizes = [_orientation_free_size(w, h) for _, w, h in items]
     placed_sizes = []
     for page in doc:
         boxes = [fitz.Rect(info['bbox']) for info in page.get_image_info()]
@@ -48,10 +77,9 @@ def _assert_labels_unscaled_inside_margin_and_spaced(doc, items, margin_pt, spac
                 gap = max(second.x0 - first.x1, first.x0 - second.x1,
                           second.y0 - first.y1, first.y0 - second.y1)
                 assert gap >= spacing_pt - TOLERANCE_PT
-    placed_sizes.sort()
     assert len(placed_sizes) == len(cropped_sizes)
-    for cropped, placed in zip(cropped_sizes, placed_sizes):
-        assert all(abs(c - p) <= TOLERANCE_PT for c, p in zip(cropped, placed)), (
+    for cropped, placed in _pair_sizes(cropped_sizes, placed_sizes):
+        assert _size_difference(cropped, placed) <= TOLERANCE_PT, (
             f"A label was scaled on the sheet: cropped {cropped}, placed {placed}"
         )
 
