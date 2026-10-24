@@ -19,8 +19,14 @@ from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
 
 DEFAULT_DIR = Path(__file__).resolve().parent / "labels"
+DEFAULT_COUNT = 6
+DEFAULT_WIDTH_MM = 100
+DEFAULT_HEIGHT_MM = 60
 LEFT_MM = 25
 TOP_MM = 20
+# Knuth's multiplicative hash constant, spreads consecutive label numbers
+# over very different bar patterns.
+KNUTH_HASH = 2654435761
 
 
 def draw_label(c, x, y, width, height, number):
@@ -39,14 +45,14 @@ def draw_label(c, x, y, width, height, number):
         c.drawString(x + 5 * mm, y + height - (17 + 4.5 * i) * mm, line)
     # A bar pattern that looks like a barcode. The bit pattern depends on
     # the label number so every label is different.
-    bits = f"{(number * 2654435761) % (1 << 40):040b}"
+    bits = f"{(number * KNUTH_HASH) % (1 << 40):040b}"
     bar_x = x + width - 37 * mm
     for i, bit in enumerate(bits):
         if bit == "1":
             c.rect(bar_x + i * 0.8 * mm, y + 5 * mm, 0.6 * mm, 12 * mm, stroke=0, fill=1)
 
 
-def make_labels(out_dir, count=6, width_mm=100, height_mm=60):
+def make_labels(out_dir, count=DEFAULT_COUNT, width_mm=DEFAULT_WIDTH_MM, height_mm=DEFAULT_HEIGHT_MM):
     """Write count label PDFs into out_dir and return their paths."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -67,9 +73,9 @@ def make_labels(out_dir, count=6, width_mm=100, height_mm=60):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("out_dir", nargs="?", default=DEFAULT_DIR, type=Path)
-    parser.add_argument("--count", type=int, default=6)
-    parser.add_argument("--width", type=float, default=100, metavar="MM")
-    parser.add_argument("--height", type=float, default=60, metavar="MM")
+    parser.add_argument("--count", type=int, default=DEFAULT_COUNT)
+    parser.add_argument("--width", type=float, default=DEFAULT_WIDTH_MM, metavar="MM")
+    parser.add_argument("--height", type=float, default=DEFAULT_HEIGHT_MM, metavar="MM")
     args = parser.parse_args()
     for path in make_labels(args.out_dir, args.count, args.width, args.height):
         print(path)
