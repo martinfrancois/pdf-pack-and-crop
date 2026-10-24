@@ -17,7 +17,10 @@ def real_rectpack(monkeypatch):
         monkeypatch.setattr(cp, name, getattr(rectpack, name))
 
 
-def test_find_minimal_packing_puts_many_small_snippets_on_one_sheet(real_rectpack):
+pytestmark = pytest.mark.usefixtures('real_rectpack')
+
+
+def test_find_minimal_packing_puts_many_small_snippets_on_one_sheet():
     side = SHEET_PT / 5
     snippets = [(f'small{i}', side, side) for i in range(12)]
 
@@ -28,7 +31,7 @@ def test_find_minimal_packing_puts_many_small_snippets_on_one_sheet(real_rectpac
     assert len(packer.rect_list()) == len(snippets)
 
 
-def test_find_minimal_packing_adds_sheets_until_everything_fits(real_rectpack):
+def test_find_minimal_packing_adds_sheets_until_everything_fits():
     side = SHEET_PT * 0.6
     snippets = [(f'large{i}', side, side) for i in range(3)]
 
@@ -40,7 +43,7 @@ def test_find_minimal_packing_adds_sheets_until_everything_fits(real_rectpack):
 
 
 @pytest.mark.parametrize('spacing_pt, expected_sheets', [(0, 1), (1, 2)])
-def test_find_minimal_packing_pads_snippets_by_the_spacing(real_rectpack, spacing_pt, expected_sheets):
+def test_find_minimal_packing_pads_snippets_by_the_spacing(spacing_pt, expected_sheets):
     side = SHEET_PT / 2
     snippets = [('left', side, side), ('right', side, side)]
 
@@ -63,9 +66,12 @@ def test_find_minimal_packing_raises_when_a_snippet_is_larger_than_the_sheet():
 
 
 def test_find_minimal_packing_rotates_a_snippet_that_only_fits_sideways():
-    snippets = [('wide', 120, 80)]
+    long_side, short_side = SHEET_PT * 1.2, SHEET_PT * 0.8
+    snippets = [('wide', long_side, short_side)]
 
-    packer, rotated = cp.find_minimal_packing(snippets, 80, 120, 0)
+    packer, rotated = cp.find_minimal_packing(snippets, short_side, long_side, 0)
 
     assert rotated is True
     assert len(list(packer)) == 1
+    [(_, _, _, width, height, _)] = packer.rect_list()
+    assert (width, height) == (short_side, long_side)
