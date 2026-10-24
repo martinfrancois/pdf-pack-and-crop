@@ -22,6 +22,38 @@ PAGE_MARGIN_MM = 5
 SPACING_MM = 1
 DPI = 300
 WHITE_THRESHOLD = 250
+# Placed positions go through float maths in rectpack and PyMuPDF, so allow a little noise.
+TOLERANCE_PT = 0.5
+
+
+def _orientation_free_size(width, height):
+    # A label placed with a 90 degree turn swaps width and height.
+    return tuple(sorted((width, height)))
+
+
+def _assert_labels_unscaled_inside_margin_and_spaced(doc, items, margin_pt, spacing_pt):
+    import fitz  # the caller has already replaced any stub with the real module
+
+    cropped_sizes = sorted(_orientation_free_size(w, h) for _, w, h in items)
+    placed_sizes = []
+    for page in doc:
+        boxes = [fitz.Rect(info['bbox']) for info in page.get_image_info()]
+        placed_sizes.extend(_orientation_free_size(box.width, box.height) for box in boxes)
+        for box in boxes:
+            assert box.x0 >= margin_pt - TOLERANCE_PT and box.y0 >= margin_pt - TOLERANCE_PT
+            assert box.x1 <= page.rect.width - margin_pt + TOLERANCE_PT
+            assert box.y1 <= page.rect.height - margin_pt + TOLERANCE_PT
+        for i, first in enumerate(boxes):
+            for second in boxes[i + 1:]:
+                gap = max(second.x0 - first.x1, first.x0 - second.x1,
+                          second.y0 - first.y1, first.y0 - second.y1)
+                assert gap >= spacing_pt - TOLERANCE_PT
+    placed_sizes.sort()
+    assert len(placed_sizes) == len(cropped_sizes)
+    for cropped, placed in zip(cropped_sizes, placed_sizes):
+        assert all(abs(c - p) <= TOLERANCE_PT for c, p in zip(cropped, placed)), (
+            f"A label was scaled on the sheet: cropped {cropped}, placed {placed}"
+        )
 
 
 # With these settings, none of labels 2, 3, 4 and 6 fits on a sheet next to another label from
@@ -102,22 +134,8 @@ def test_pack_and_crop_labels_various(tmp_path, label_nums, expected_pages):
 
     # A smaller page count must come from better packing, not from shrinking a label,
     # crossing the page margin or dropping the spacing between labels.
-    margin_pt, spacing_pt, tolerance_pt = cp.mm_to_pt(PAGE_MARGIN_MM), cp.mm_to_pt(SPACING_MM), 0.5
-    cropped_sizes = sorted(sorted((round(w, 1), round(h, 1))) for _, w, h in items)
-    placed_sizes = []
-    for page in doc:
-        boxes = [fitz.Rect(info['bbox']) for info in page.get_image_info()]
-        placed_sizes.extend(sorted((round(box.width, 1), round(box.height, 1))) for box in boxes)
-        for box in boxes:
-            assert box.x0 >= margin_pt - tolerance_pt and box.y0 >= margin_pt - tolerance_pt
-            assert box.x1 <= page.rect.width - margin_pt + tolerance_pt
-            assert box.y1 <= page.rect.height - margin_pt + tolerance_pt
-        for i, first in enumerate(boxes):
-            for second in boxes[i + 1:]:
-                gap = max(second.x0 - first.x1, first.x0 - second.x1,
-                          second.y0 - first.y1, first.y0 - second.y1)
-                assert gap >= spacing_pt - tolerance_pt
-    assert sorted(placed_sizes) == cropped_sizes, "A label was scaled on the sheet"
+    _assert_labels_unscaled_inside_margin_and_spaced(
+        doc, items, cp.mm_to_pt(PAGE_MARGIN_MM), cp.mm_to_pt(SPACING_MM))
 
     # Verify each input file is represented in the cropped output
     represented = {Path(p).stem.split('_', 1)[0] for p, _, _ in items}
