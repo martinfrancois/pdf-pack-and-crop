@@ -69,15 +69,26 @@ def _assert_labels_unscaled_inside_margin_and_spaced(doc, items, margin_pt, spac
         boxes = [fitz.Rect(info['bbox']) for info in page.get_image_info()]
         placed_sizes.extend(_orientation_free_size(box.width, box.height) for box in boxes)
         for box in boxes:
-            assert box.x0 >= margin_pt - TOLERANCE_PT and box.y0 >= margin_pt - TOLERANCE_PT
-            assert box.x1 <= page.rect.width - margin_pt + TOLERANCE_PT
-            assert box.y1 <= page.rect.height - margin_pt + TOLERANCE_PT
+            assert box.x0 >= margin_pt - TOLERANCE_PT and box.y0 >= margin_pt - TOLERANCE_PT, (
+                f"A label on sheet {page.number + 1} starts inside the top or left margin: {box}"
+            )
+            assert box.x1 <= page.rect.width - margin_pt + TOLERANCE_PT, (
+                f"A label on sheet {page.number + 1} ends inside the right margin: {box}"
+            )
+            assert box.y1 <= page.rect.height - margin_pt + TOLERANCE_PT, (
+                f"A label on sheet {page.number + 1} ends inside the bottom margin: {box}"
+            )
         for i, first in enumerate(boxes):
             for second in boxes[i + 1:]:
                 gap = max(second.x0 - first.x1, first.x0 - second.x1,
                           second.y0 - first.y1, first.y0 - second.y1)
-                assert gap >= spacing_pt - TOLERANCE_PT
-    assert len(placed_sizes) == len(cropped_sizes)
+                assert gap >= spacing_pt - TOLERANCE_PT, (
+                    f"Two labels on sheet {page.number + 1} have a gap of {gap:.2f} pt, "
+                    f"below the {spacing_pt:.2f} pt spacing: {first} and {second}"
+                )
+    assert len(placed_sizes) == len(cropped_sizes), (
+        f"Expected {len(cropped_sizes)} labels on the sheets, found {len(placed_sizes)}"
+    )
     for cropped, placed in _pair_sizes(cropped_sizes, placed_sizes):
         assert _size_difference(cropped, placed) <= TOLERANCE_PT, (
             f"A label was scaled on the sheet: cropped {cropped}, placed {placed}"
