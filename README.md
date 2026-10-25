@@ -28,10 +28,10 @@
 Python 3.10 or newer. From a clone of this repository:
 
 ```bash
-python -m pip install -e .
+python -m pip install -r requirements.txt
 ```
 
-This installs `pymupdf` and `rectpack` and adds the `pack-and-crop` command, which takes the same arguments as `python pack_and_crop.py`.
+This installs the runtime and test dependencies. Run the script with `python pack_and_crop.py`.
 
 ---
 
@@ -88,10 +88,10 @@ python pack_and_crop.py examples/labels -o packed.pdf
 
 ## Running Tests
 
-Install the tool with the test dependencies and run `pytest`:
+Install the dependencies and run `pytest`:
 
 ```bash
-python -m pip install -r requirements.txt -e .
+python -m pip install -r requirements.txt
 python -m pytest
 ```
 

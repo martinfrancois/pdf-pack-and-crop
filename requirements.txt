@@ -1,2 +1,4 @@
+pymupdf==1.28.2
+rectpack==0.2.2
 pytest==9.1.1
 reportlab==5.0.1
