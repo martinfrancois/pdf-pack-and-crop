@@ -25,10 +25,6 @@
   "separateMajorMinor": true,
   "separateMultipleMajor": true,
   "separateMinorPatch": false,
-  "schedule": [
-    "* * * * 5"
-  ],
-  "updateNotScheduled": false,
   "vulnerabilityAlerts": {
     "enabled": true,
     "labels": [
@@ -51,16 +47,6 @@
         "digest"
       ],
       "automerge": true
-    },
-    {
-      "description": "Raise the setuptools lower bound in build-system.requires instead of pinning it, so building from source keeps accepting newer setuptools releases.",
-      "matchManagers": [
-        "pep621"
-      ],
-      "matchDepTypes": [
-        "build-system.requires"
-      ],
-      "rangeStrategy": "bump"
     },
     {
       "description": "Major updates require human review.",

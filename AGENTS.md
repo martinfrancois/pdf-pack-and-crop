@@ -3,7 +3,7 @@
 Install and test:
 
 ```bash
-python -m pip install -r requirements.txt -e .
+python -m pip install -r requirements.txt
 python -m pytest
 ```
 
