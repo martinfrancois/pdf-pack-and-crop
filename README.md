@@ -97,6 +97,12 @@ python -m pytest
 
 The tests crop and pack the example labels. `requirements.txt` also has `reportlab`, which `examples/make_labels.py` needs to regenerate them.
 
+`test/label1.pdf` through `test/label11.pdf` are redacted shipping labels supplied
+by the repository owner and approved for public use. The CLI tests use these
+realistic inputs alongside the generated examples to check label preservation,
+packing, margins, spacing, and scale. See [`test/README.md`](test/README.md) for
+fixture provenance.
+
 ## Contributing
 
 1. Fork, hack, run `black *.py`.
