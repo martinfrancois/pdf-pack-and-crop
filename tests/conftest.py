@@ -69,7 +69,7 @@ def _stub_if_missing(name, **attrs):
 
 
 # Runs before any test module imports pack_and_crop, so the unit tests work without the optional libraries.
-_stub_if_missing("fitz")
+_stub_if_missing("pymupdf")
 _stub_if_missing(
     "rectpack",
     newPacker=lambda **kwargs: StubPacker(**kwargs),
