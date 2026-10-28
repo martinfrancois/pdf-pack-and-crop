@@ -2,7 +2,7 @@ from collections import namedtuple
 from pathlib import Path
 import tempfile
 
-import pymupdf as fitz
+import pymupdf
 
 import pack_and_crop as cp
 
@@ -15,7 +15,7 @@ Packed = namedtuple('Packed', 'items packer rotated doc')
 
 
 def make_pdf(path: Path, width=100, height=100):
-    doc = fitz.open()
+    doc = pymupdf.open()
     doc.new_page(width=width, height=height)
     doc.save(path)
 
@@ -40,7 +40,7 @@ def pack_and_render(pdfs, pagesize, output):
         pk, rot = cp.find_minimal_packing(items, eff_w, eff_h, spacing_pt)
         cp.render_pdf(pk, items, page_w, page_h, margin_pt, spacing_pt, rot, str(output))
 
-    return Packed(items, pk, rot, fitz.open(output))
+    return Packed(items, pk, rot, pymupdf.open(output))
 
 
 def test_full_flow(tmp_path):

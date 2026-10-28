@@ -13,7 +13,7 @@ Pack-and-Crop
 """
 
 import sys, io, argparse, tempfile
-import fitz                               # PyMuPDF
+import pymupdf
 from pathlib import Path
 from rectpack import newPacker, MaxRectsBssf, SORT_AREA
 
@@ -68,7 +68,7 @@ def crop_pages(pdf_paths, tmpdir, dpi, white_thresh):
     """Rasterise each page, crop near-white margins, save as PNG."""
     items = []
     for pdf in pdf_paths:
-        doc = fitz.open(pdf)
+        doc = pymupdf.open(pdf)
         pdf_stem = Path(pdf).stem  # Get filename without extension
         for i in range(doc.page_count):
             page  = doc.load_page(i)
@@ -76,7 +76,7 @@ def crop_pages(pdf_paths, tmpdir, dpi, white_thresh):
             
             # Convert to grayscale for finding crop bounds
             # PyMuPDF can do this without PIL
-            gray_pix = fitz.Pixmap(fitz.csGRAY, pix)
+            gray_pix = pymupdf.Pixmap(pymupdf.csGRAY, pix)
             
             # Find the bounding box of non-white pixels
             # We'll scan the image data to find bounds
@@ -103,9 +103,9 @@ def crop_pages(pdf_paths, tmpdir, dpi, white_thresh):
                 # Crop the pixmap using PyMuPDF
                 # PyMuPDF crops by getting a sub-pixmap from a rectangle
                 # PIL's getbbox returns (left, top, right, bottom) where right and bottom are exclusive
-                crop_rect = fitz.IRect(min_x, min_y, max_x + 1, max_y + 1)
+                crop_rect = pymupdf.IRect(min_x, min_y, max_x + 1, max_y + 1)
                 # Get the cropped pixmap by creating a new one from the cropped area
-                cropped_pix = fitz.Pixmap(fitz.csRGB, crop_rect, False)
+                cropped_pix = pymupdf.Pixmap(pymupdf.csRGB, crop_rect, False)
                 cropped_pix.copy(pix, crop_rect)
                 
                 w_px, h_px = cropped_pix.width, cropped_pix.height
@@ -152,7 +152,7 @@ def rect_rotated(rect, w0, h0, spacing_pt):
 
 
 def render_pdf(packer, items, page_w, page_h, margin_pt, spacing_pt, rotate_used, output):
-    out = fitz.open()
+    out = pymupdf.open()
     for _ in packer:
         out.new_page(width=page_w, height=page_h)
 
@@ -167,7 +167,7 @@ def render_pdf(packer, items, page_w, page_h, margin_pt, spacing_pt, rotate_used
             x0 = margin_pt + x
             y0 = page_h - (margin_pt + y + ch)
 
-            rect_dest = fitz.Rect(x0, y0, x0 + cw, y0 + ch)
+            rect_dest = pymupdf.Rect(x0, y0, x0 + cw, y0 + ch)
             out[bin_idx].insert_image(rect_dest, filename=img_path, rotate=90 if rotated else 0)
 
     out.save(output)
