@@ -92,10 +92,14 @@ Install the dependencies and run `pytest`:
 
 ```bash
 python -m pip install -r requirements.txt
-python -m pytest
+python -m pytest --cov=pack_and_crop --cov-report=term-missing --cov-report=json:coverage.json
 ```
 
 The tests crop and pack the example labels. `requirements.txt` also has `reportlab`, which `examples/make_labels.py` needs to regenerate them.
+
+The coverage report measures `pack_and_crop.py`. CI checks that the JSON report
+contains executed lines for that module; a successful test count alone is not
+enough to pass the coverage check.
 
 `test/label1.pdf` through `test/label11.pdf` are redacted shipping labels supplied
 by the repository owner and approved for public use. The CLI tests use these
@@ -105,7 +109,7 @@ fixture provenance.
 
 ## Contributing
 
-1. Fork, hack, run `black *.py`.
+1. Follow the existing code style and run the checks in [Running Tests](#running-tests).
 2. Include before/after PDFs or screenshots in PRs.
 
 ## License
