@@ -25,7 +25,8 @@
 
 ## 📦 Requirements
 
-Python 3.10 or newer. From a clone of this repository:
+Python 3.11 to 3.14. PyMuPDF needs onnxruntime, which has no wheels for Python 3.15 yet.
+From a clone of this repository:
 
 ```bash
 python -m pip install -r requirements.txt
