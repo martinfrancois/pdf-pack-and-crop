@@ -1,0 +1,18 @@
+name: PR claim check
+# Every hour, flags a contributor's pull request that closes an issue its
+# author doesn't hold, or that another open pull request addresses. The logic
+# lives in martinfrancois/.github and only reads metadata.
+on:
+  schedule:
+    - cron: "41 * * * *"
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: pr-claim-check
+  cancel-in-progress: false
+jobs:
+  check:
+    permissions:
+      issues: read
+      pull-requests: write
+    uses: martinfrancois/.github/.github/workflows/pr-claim-check.yml@68636afb7ff462c30f2594c15d3cfe127e0b3e65 # v1.2.0

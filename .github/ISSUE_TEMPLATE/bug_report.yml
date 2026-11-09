@@ -1,0 +1,31 @@
+name: Bug report
+description: Report something that doesn't work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Leave out addresses, tracking numbers, private paths and other personal data, also from PDFs, logs and screenshots. Remove that text from a real label before you attach it, since a box drawn over text can leave it readable, or use the synthetic labels in `examples/labels` or the redacted ones in `test`.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The command you ran and a small PDF that shows the problem, ideally with before and after output.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Commit, operating system, Python and PyMuPDF versions, and anything else that matters here.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output or logs
+      render: text
