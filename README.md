@@ -110,7 +110,10 @@ fixture provenance.
 
 ## Contributing
 
-1. Follow the existing code style and run the checks in [Running Tests](#running-tests).
+[CONTRIBUTING.md](CONTRIBUTING.md) explains how to claim an issue and where to
+propose a feature. For every change:
+
+1. Follow the existing code style and run the checks in [CONTRIBUTING.md](CONTRIBUTING.md#run-the-checks).
 2. Include before/after PDFs or screenshots in PRs.
 
 ## License
