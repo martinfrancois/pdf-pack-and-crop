@@ -1,4 +1,4 @@
-pymupdf==2.0
+pymupdf==2.1
 rectpack==0.2.2
 pytest==9.2.0
 pytest-cov==7.1.0
